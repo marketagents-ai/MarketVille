@@ -128,7 +128,7 @@ def deploy_dummy_erc20_contract(address_index=0, initial_amount=10000):
     source_code = load_solidity_source('dummy_erc20.sol')
     
     # Initialize Ethereum interface
-    eth = EthereumInterface('../ganache_config.json')
+    eth = EthereumInterface('./ganache_config.json')
     address = eth.get_address_from_index(address_index)
     private_key = eth.get_private_key_from_index(address_index)
     
@@ -200,7 +200,7 @@ def mint_erc20_tokens(contract_instance, address_index, amount):
         amount (int): Amount of tokens to mint
     """
     # Initialize Ethereum interface
-    eth = EthereumInterface('../ganache_config.json')
+    eth = EthereumInterface('./ganache_config.json')
     address = eth.get_address_from_index(address_index)
     private_key = eth.get_private_key_from_index(address_index)
     
