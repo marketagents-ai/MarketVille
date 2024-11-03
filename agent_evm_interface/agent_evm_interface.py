@@ -18,7 +18,7 @@ pip install requests
 
 ERC20_ABI = []
 # load ./erc20_abi.json
-with open(Path(__file__).parent / 'erc20_abi.json', 'r') as f:
+with open(Path(__file__).parent.parent / 'agent_evm_testnet' / 'erc20_abi.json', 'r') as f:
     ERC20_ABI = json.load(f)
 
 def external(func):
@@ -53,32 +53,32 @@ class EthereumInterface:
     
     @external
     def get_address_list(self) -> List[str]:
-        r"""
-        {
-        "description": "Retrieves a list of Ethereum addresses that are available for use.",
-        "returns": {
-            "type": "List[str]",
-            "description": "List of Ethereum addresses"
-        },
-        "example": ">>> addresses = get_address_list()\n['0x...', '0x...', ...]"
-        }
+        """
+        Retrieves a list of Ethereum addresses that are available for use.
+
+        Returns:
+            List[str]: List of Ethereum addresses
+
+        Example:
+            >>> addresses = get_address_list()
+            ['0x...', '0x...', ...]
         """
         return self.config['addresses']
 
     
     def get_address_from_index(self, index: int) -> str:
-        r"""
-        {
-        "description": "Retrieves the ethereum address at a gven index (max 9). These are your accounts.",
-        "args": [
-            {"name": "index", "type": "int", "description": "Index of the account to retrieve"}
-        ],
-        "returns": {
-            "type": "str",
-            "description": "The Ethereum address corresponding to the given index"
-        },
-        "example": ">>> address = get_address_from_index(0)\n'0x...'"
-        }
+        """
+        Retrieves the ethereum address at a given index (max 9). These are your accounts.
+
+        Args:
+            index (int): Index of the account to retrieve
+
+        Returns:
+            str: The Ethereum address corresponding to the given index
+
+        Example:
+            >>> address = get_address_from_index(0)
+            '0x...'
         """
         if 0 <= index < len(self.config['addresses']):
             return self.config['addresses'][index]
@@ -86,18 +86,18 @@ class EthereumInterface:
     
     
     def get_private_key_from_index(self, index: int) -> str:
-        r"""
-        {
-        "description": "Retrieves the private key for a given account index.",
-        "args": [
-            {"name": "index", "type": "int", "description": "Index of the account to retrieve"}
-        ],
-        "returns": {
-            "type": "str",
-            "description": "The private key corresponding to the given index"
-        },
-        "example": ">>> private_key = get_private_key_from_index(0)\n'0x...'"
-        }
+        """
+        Retrieves the private key for a given account index.
+
+        Args:
+            index (int): Index of the account to retrieve
+
+        Returns:
+            str: The private key corresponding to the given index
+
+        Example:
+            >>> private_key = get_private_key_from_index(0)
+            '0x...'
         """
         if 0 <= index < len(self.config['private_keys']):
             return self.config['private_keys'][index]
@@ -105,38 +105,39 @@ class EthereumInterface:
 
     @external
     def get_eth_balance(self, address: str) -> float:
-        r"""
-        {
-        "description": "Gets the ETH balance of an address in ETH units. You MUST have a valid ethereum address. If you are wondering about accounts you own, get the address list first.",
-        "args": [
-            {"name": "address", "type": "str", "description": "The Ethereum address to check"}
-        ],
-        "returns": {
-            "type": "float",
-            "description": "The balance in ETH"
-        },
-        "example": ">>> balance = get_eth_balance('0x...')\n1.5"
-        }
+        """
+        Gets the ETH balance of an address in ETH units. You MUST have a valid ethereum address. 
+        If you are wondering about accounts you own, get the address list first.
+
+        Args:
+            address (str): The Ethereum address to check
+
+        Returns:
+            float: The balance in ETH
+
+        Example:
+            >>> balance = get_eth_balance('0x...')
+            1.5
         """
         balance_wei = self.w3.eth.get_balance(address)
         return str(Web3.from_wei(balance_wei, 'ether')) + " Ether (ETH)"
     
     @external
     def send_eth_from_index(self, address_index: int, to_address: str, value_eth: float) -> str:
-        r"""
-        {
-        "description": "Sends ETH from an account (specified by index) to a destination address.",
-        "args": [
-            {"name": "address_index", "type": "int", "description": "Index of the sending account"},
-            {"name": "to_address", "type": "str", "description": "Destination Ethereum address"},
-            {"name": "value_eth", "type": "float", "description": "Amount of ETH to send"}
-        ],
-        "returns": {
-            "type": "str",
-            "description": "The transaction hash of the transfer"
-        },
-        "example": ">>> tx_hash = send_eth_from_index(0, '0x...', 1.5)\n'0x...'"
-        }
+        """
+        Sends ETH from an account (specified by index) to a destination address.
+
+        Args:
+            address_index (int): Index of the sending account
+            to_address (str): Destination Ethereum address
+            value_eth (float): Amount of ETH to send
+
+        Returns:
+            str: The transaction hash of the transfer
+
+        Example:
+            >>> tx_hash = send_eth_from_index(0, '0x...', 1.5)
+            '0x...'
         """
         from_address = self.get_address_from_index(address_index)
         private_key = self.config['private_keys'][address_index]
@@ -186,19 +187,20 @@ class EthereumInterface:
     
     @external
     def get_erc20_balance(self, contract_address: str, address: str) -> int:
-        r"""
-        {
-        "description": "Gets the ERC20 token balance of an address. The contract address must be in the whitelist. If you are wondering about tokens you own, get the whitelist first.",
-        "args": [
-            {"name": "contract_address", "type": "str", "description": "Address of the ERC20 token contract"},
-            {"name": "address", "type": "str", "description": "The Ethereum address to check"}
-        ],
-        "returns": {
-            "type": "int",
-            "description": "The token balance"
-        },
-        "example": ">>> balance = get_erc20_balance('0x...', '0x...')\n1000000"
-        }
+        """
+        Gets the ERC20 token balance of an address. The contract address must be in the whitelist.
+        If you are wondering about tokens you own, get the whitelist first.
+
+        Args:
+            contract_address (str): Address of the ERC20 token contract
+            address (str): The Ethereum address to check
+
+        Returns:
+            int: The token balance
+
+        Example:
+            >>> balance = get_erc20_balance('0x...', '0x...')
+            1000000
         """
         contract = self.w3.eth.contract(address=contract_address, abi=ERC20_ABI)
         
@@ -206,21 +208,21 @@ class EthereumInterface:
     
     @external
     def send_erc20(self, contract_address: str, from_index: int, to_address: str, amount: int) -> str:
-        r"""
-        {
-        "description": "Sends ERC20 tokens from an account to a destination address.",
-        "args": [
-            {"name": "contract_address", "type": "str", "description": "Address of the ERC20 token contract"},
-            {"name": "from_index", "type": "int", "description": "Index of the sending account"},
-            {"name": "to_address", "type": "str", "description": "Destination Ethereum address"},
-            {"name": "amount", "type": "int", "description": "Amount of tokens to send"}
-        ],
-        "returns": {
-            "type": "str",
-            "description": "The transaction hash of the transfer"
-        },
-        "example": ">>> tx_hash = send_erc20('0x...', 0, '0x...', 1000000)\n'0x...'"
-        }
+        """
+        Sends ERC20 tokens from an account to a destination address.
+
+        Args:
+            contract_address (str): Address of the ERC20 token contract
+            from_index (int): Index of the sending account
+            to_address (str): Destination Ethereum address
+            amount (int): Amount of tokens to send
+
+        Returns:
+            str: The transaction hash of the transfer
+
+        Example:
+            >>> tx_hash = send_erc20('0x...', 0, '0x...', 1000000)
+            '0x...'
         """
         # require than contract address is in whitelist
         if contract_address not in [x['address'] for x in self.whitelist_erc20_addresses]:
@@ -245,21 +247,21 @@ class EthereumInterface:
    
     @external
     def get_whitelist_erc20_addresses(self):
-        r"""
-        {
-        "description": "Retrieves a list of whitelisted ERC20 token addresses.",
-        "returns": {
-            "type": "List[Dict]",
-            "description": "List of dictionaries containing token address, name, symbol, and decimals"
-        },
-        "example": ">>> whitelist = get_whitelist_erc20_addresses()\n[{'address': '0x...', 'name': 'Token Name', 'symbol': 'TKN', 'decimals': 18}]"
-        }
+        """
+        Retrieves a list of whitelisted ERC20 token addresses.
+
+        Returns:
+            List[Dict]: List of dictionaries containing token address, name, symbol, and decimals
+
+        Example:
+            >>> whitelist = get_whitelist_erc20_addresses()
+            [{'address': '0x...', 'name': 'Token Name', 'symbol': 'TKN', 'decimals': 18}]
         """
         return self.whitelist_erc20_addresses
         
 @init
 def init_ethereum_interface():
-    ganache_config_path = Path(__file__).parent / '../ganache_config.json'
+    ganache_config_path: str = str(Path(__file__).parent.parent / 'agent_evm_testnet' / 'ganache_config.json')
     etherscan_api_key = ""
     whitelist_erc20_addresses = []
     instance =  EthereumInterface(ganache_config_path, etherscan_api_key, whitelist_erc20_addresses)
