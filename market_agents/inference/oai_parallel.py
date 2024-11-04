@@ -414,14 +414,16 @@ def api_endpoint_from_url(request_url: str) -> str:
       Output: "completions"
     - Input: "http://localhost:8000/v1/completions"
       Output: "completions"
+    - Input: "http://00.000.000.00:8000/v1/completions"
+      Output: "completions"
     """
     match = re.search("^https://[^/]+/v\\d+/(.+)$", request_url)
     if match is None:
         # for Azure OpenAI deployment urls
         match = re.search(r"^https://[^/]+/openai/deployments/[^/]+/(.+?)(\?|$)", request_url)
         if match is None:
-            # for vLLM endpoints
-            match = re.search(r"^http://localhost:8000/v\d+/(.+)$", request_url)
+            # for vLLM endpoints with localhost or IP address
+            match = re.search(r"^http://(?:localhost|\d+\.\d+\.\d+\.\d+):\d+/v\d+/(.+)$", request_url)
             if match is None:
                 raise ValueError(f"Invalid URL: {request_url}")
     return match[1]
