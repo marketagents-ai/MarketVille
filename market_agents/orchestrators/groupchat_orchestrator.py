@@ -253,8 +253,8 @@ class GroupChatOrchestrator(BaseEnvironmentOrchestrator):
             perception = perceptions_map.get(agent.id)
             if perception:
                 log_persona(self.logger, agent.index, agent.persona)
-                log_perception(self.logger, agent.index, f"{perception.str_content}")
-                agent.last_perception = perception.str_content
+                log_perception(self.logger, agent.index, f"{perception.json_object.object if perception.json_object else perception.str_content}")
+                agent.last_perception = perception.json_object.object if perception.json_object else None
             else:
                 self.logger.warning(f"No perception found for agent {agent.index}")
                 agent.last_perception = ""
