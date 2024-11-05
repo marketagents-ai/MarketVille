@@ -260,13 +260,12 @@ class LLMOutput(BaseModel):
     @computed_field
     @property
     def json_object(self) -> Optional[GeneratedJsonObject]:
-        tool_calls = self._parse_result()[1]
-        return tool_calls[0] if tool_calls else None
+        return self._parse_result()[1]
     
     @computed_field
     @property
     def tool_calls(self) -> Optional[List[GeneratedJsonObject]]:
-        return self._parse_result()[1]
+        return self._parse_result()[4]
     
     @computed_field
     @property
@@ -333,6 +332,8 @@ class LLMOutput(BaseModel):
                 except json.JSONDecodeError:
                     tool_call_object = GeneratedJsonObject(name=name, object={"raw": arguments})
                 tool_calls.append(tool_call_object)
+            if tool_calls:
+                json_object = tool_calls[0]
         elif content is not None:
             if self.completion_kwargs:
                 name = self.completion_kwargs.get("response_format",{}).get("json_schema",{}).get("name",None)
@@ -352,7 +353,7 @@ class LLMOutput(BaseModel):
                 total_tokens=chat_completion.usage.total_tokens
             )
 
-        return content, tool_calls, usage, None
+        return content, json_object, usage, None, tool_calls
 
     def _parse_anthropic_message(self, message: Union[AnthropicMessage, PromptCachingBetaMessage]) -> Tuple[Optional[str], Optional[GeneratedJsonObject], Optional[Usage],None]:
         content = None

@@ -28,16 +28,19 @@ async def main():
         output_format="tool",
         tools=tools,
         llm_config=LLMConfig(
+            #client="vllm",
+            #model="NousResearch/Hermes-3-Llama-3.1-8B",
             client="openai",
             model="gpt-4o-mini",
             temperature=0
         )
     )
 
-    # Example tasks
+    # Example tasks demonstrating all external functions
     tasks = [
         "What Ethereum addresses do I have available?",
         "What ETH balance for this address: '0x395D54F5403176936891B8e10cc735aFE838B965'",
+        "Show me the list of whitelisted ERC20 tokens",
     ]
 
     # Execute tasks
