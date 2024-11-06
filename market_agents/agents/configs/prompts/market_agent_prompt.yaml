@@ -6,6 +6,7 @@ perception: |
   Recent Memories: {recent_memories}
 
   Generate a brief monologue about your current perception of this environment.
+  Use emojis to fully express yourself when needed.
 
 action: |
   Generate an action for the {environment_name} environment based on the following:
