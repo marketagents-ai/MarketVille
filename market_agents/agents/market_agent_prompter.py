@@ -1,7 +1,44 @@
+import json
 from pydantic import BaseModel, Field
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 import yaml
 import os
+
+def json_to_markdown(data: Union[Dict, List, Any], indent: int = 0) -> str:
+    """Convert JSON/dict data to a markdown formatted string."""
+    if data is None:
+        return "None"
+    
+    if isinstance(data, str):
+        # Properly escape the string for JSON compatibility
+        return json.dumps(data)[1:-1]  # Remove the quotes but keep the escaping
+    
+    if isinstance(data, (int, float, bool)):
+        return str(data)
+    
+    if isinstance(data, list):
+        if not data:
+            return "[]"
+        markdown = "\n"
+        for item in data:
+            item_str = json_to_markdown(item, indent + 1).lstrip()
+            markdown += "  " * indent + "- " + item_str + "\n"
+        return markdown.rstrip()
+    
+    if isinstance(data, dict):
+        if not data:
+            return "{}"
+        markdown = "\n"
+        for key, value in data.items():
+            key_str = json.dumps(str(key))[1:-1]  # Properly escape the key
+            value_str = json_to_markdown(value, indent + 1)
+            if isinstance(value, (dict, list)):
+                markdown += "  " * indent + f"- {key_str}:{value_str}\n"
+            else:
+                markdown += "  " * indent + f"- {key_str}: {value_str}\n"
+        return markdown.rstrip()
+    
+    return json.dumps(str(data))[1:-1]  
 
 class AgentPromptVariables(BaseModel):
     environment_name: str
@@ -29,13 +66,23 @@ class MarketAgentPromptManager(BaseModel):
                 self.prompts = yaml.safe_load(file)
         except FileNotFoundError:
             raise FileNotFoundError(f"Prompt file not found: {full_path}")
-
+        
     def format_prompt(self, prompt_type: str, variables: Dict[str, Any]) -> str:
         if prompt_type not in self.prompts:
             raise ValueError(f"Unknown prompt type: {prompt_type}")
         
-        prompt_template = self.prompts[prompt_type]
-        return prompt_template.format(**variables)
+        # Auto-convert any JSON/dict/list values to markdown
+        markdown_vars = {}
+        for key, value in variables.items():
+            if isinstance(value, (dict, list)):
+                markdown_vars[key] = json_to_markdown(value)
+            else:
+                markdown_vars[key] = value
+        
+        try:
+            return self.prompts[prompt_type].format(**markdown_vars)
+        except Exception as e:
+            raise e
 
     def get_perception_prompt(self, variables: Dict[str, Any]) -> str:
         return self.format_prompt('perception', variables)
