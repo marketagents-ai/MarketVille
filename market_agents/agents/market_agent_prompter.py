@@ -7,11 +7,11 @@ import os
 def json_to_markdown(data: Union[Dict, List, Any], indent: int = 0) -> str:
     """Convert JSON/dict data to a markdown formatted string."""
     if data is None:
-        return "None"
+        return "N/A"
     
     if isinstance(data, str):
-        # Properly escape the string for JSON compatibility
-        return json.dumps(data)[1:-1]  # Remove the quotes but keep the escaping
+        # Clean up newlines and escape characters for markdown compatibility
+        return data.replace('\\n', '\n').replace('\\', '')
     
     if isinstance(data, (int, float, bool)):
         return str(data)
@@ -21,8 +21,14 @@ def json_to_markdown(data: Union[Dict, List, Any], indent: int = 0) -> str:
             return "[]"
         markdown = "\n"
         for item in data:
-            item_str = json_to_markdown(item, indent + 1).lstrip()
-            markdown += "  " * indent + "- " + item_str + "\n"
+            if isinstance(item, (dict, list)):
+                # Handle nested structures
+                item_str = json_to_markdown(item, indent + 1)
+                markdown += "  " * indent + "- " + item_str.lstrip() + "\n"
+            else:
+                # Handle simple values
+                item_str = json_to_markdown(item, indent + 1)
+                markdown += "  " * indent + "- " + item_str + "\n"
         return markdown.rstrip()
     
     if isinstance(data, dict):
@@ -30,15 +36,19 @@ def json_to_markdown(data: Union[Dict, List, Any], indent: int = 0) -> str:
             return "{}"
         markdown = "\n"
         for key, value in data.items():
-            key_str = json.dumps(str(key))[1:-1]  # Properly escape the key
+            key_str = str(key)  # No need to JSON escape keys in markdown
             value_str = json_to_markdown(value, indent + 1)
+            
             if isinstance(value, (dict, list)):
-                markdown += "  " * indent + f"- {key_str}:{value_str}\n"
+                # For nested structures, maintain proper indentation
+                markdown += "  " * indent + f"{key_str}:{value_str}\n"
             else:
-                markdown += "  " * indent + f"- {key_str}: {value_str}\n"
+                # For simple values, use key: value format
+                markdown += "  " * indent + f"{key_str}: {value_str}\n"
         return markdown.rstrip()
     
-    return json.dumps(str(data))[1:-1]  
+    # For any other types, convert to string
+    return str(data)
 
 class AgentPromptVariables(BaseModel):
     environment_name: str
@@ -71,18 +81,22 @@ class MarketAgentPromptManager(BaseModel):
         if prompt_type not in self.prompts:
             raise ValueError(f"Unknown prompt type: {prompt_type}")
         
-        # Auto-convert any JSON/dict/list values to markdown
-        markdown_vars = {}
+        # Convert empty values to N/A and format JSON/dict values as markdown
+        formatted_vars = {}
         for key, value in variables.items():
-            if isinstance(value, (dict, list)):
-                markdown_vars[key] = json_to_markdown(value)
+            if value is None or (isinstance(value, (list, dict)) and not value):
+                formatted_vars[key] = "N/A"
+            elif isinstance(value, (dict, list)):
+                formatted_vars[key] = json_to_markdown(value)
             else:
-                markdown_vars[key] = value
+                formatted_vars[key] = str(value) if value else "N/A"
         
         try:
-            return self.prompts[prompt_type].format(**markdown_vars)
+            return self.prompts[prompt_type].format(**formatted_vars)
+        except KeyError as e:
+            raise KeyError(f"Missing required variable in prompt: {e}")
         except Exception as e:
-            raise e
+            raise ValueError(f"Error formatting prompt: {e}")
 
     def get_perception_prompt(self, variables: Dict[str, Any]) -> str:
         return self.format_prompt('perception', variables)
