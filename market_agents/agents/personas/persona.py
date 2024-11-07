@@ -213,8 +213,34 @@ def generate_persona() -> Persona:
 def save_persona_to_file(persona: Persona, output_dir: Path):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create the final structure
+    persona_dict = {
+        'name': persona.name,
+        'role': persona.role,
+        'persona': persona.persona,
+        'objectives': persona.objectives,
+        'trader_type': persona.trader_type
+    }
+    
+    # Custom YAML dumper to force literal block style for the persona field
+    class LiteralDumper(yaml.SafeDumper):
+        def represent_scalar(self, tag, value, style=None):
+            if tag == 'tag:yaml.org,2002:str' and '\n' in value:
+                style = '|'
+            return super().represent_scalar(tag, value, style)
+    
     with open(output_dir / f"{persona.name.replace(' ', '_')}.yaml", "w") as f:
-        yaml.dump(persona.model_dump(), f)
+        yaml.dump(
+            persona_dict,
+            f,
+            default_flow_style=False,
+            sort_keys=False,
+            allow_unicode=True,
+            width=1000,
+            indent=2,
+            Dumper=LiteralDumper
+        )
 
 def generate_and_save_personas(num_personas: int, output_dir: Path):
     for _ in range(num_personas):
