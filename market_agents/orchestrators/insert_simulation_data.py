@@ -38,6 +38,17 @@ def serialize_memory_data(memory_data):
         return memory_data
     else:
         return str(memory_data)
+    
+def validate_json(data):
+    """Validate if data is JSON or can be parsed as JSON."""
+    if isinstance(data, dict):
+        return data
+    if isinstance(data, str):
+        try:
+            return json.loads(data)
+        except json.JSONDecodeError:
+            return None
+    return None
 
 class SimulationDataInserter:
     def __init__(self, db_params):
@@ -587,20 +598,25 @@ class SimulationDataInserter:
             perceptions_data = []
             for agent in agents:
                 if agent.last_perception is not None:
-                    perceptions_data.append({
-                        'memory_id': str(agent.id),
-                        'environment_name': 'auction',
-                        'monologue': str(agent.last_perception.get('monologue', '')),
-                        'strategy': str(agent.last_perception.get('strategy', '')),
-                        'confidence': agent.last_perception.get('confidence', 0)
-                    })
+                    # Validate and parse JSON if needed
+                    perception = validate_json(agent.last_perception)
+                    if perception is not None:
+                        perceptions_data.append({
+                            'memory_id': str(agent.id),
+                            'environment_name': 'auction',
+                            'monologue': str(perception.get('monologue', '')),
+                            'strategy': str(perception.get('strategy', '')),
+                            'confidence': perception.get('confidence', 0)
+                        })
+                    else:
+                        logging.warning(f"Invalid JSON perception data for agent {agent.id}: {agent.last_perception}")
 
             if perceptions_data:
                 logging.info(f"Inserting {len(perceptions_data)} perceptions")
                 self.insert_perceptions(perceptions_data, agent_id_map)
                 logging.info("Perceptions insertion complete")
             else:
-                logging.info("No perceptions to insert")
+                logging.info("No valid perceptions to insert")
             
             # Actions data
             logging.info("Preparing actions data")
