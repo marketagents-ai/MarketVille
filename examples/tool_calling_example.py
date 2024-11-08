@@ -4,7 +4,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import asyncio
 from market_agents.agents.base_agent.agent import Agent
 from market_agents.inference.message_models import LLMConfig
-from agent_evm_interface.agent_evm_interface_old import init_ethereum_interface
+from agent_evm_interface.agent_evm_interface import init_ethereum_interface
 
 async def main():
     # Initialize the Ethereum interface
