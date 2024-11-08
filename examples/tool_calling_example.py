@@ -11,11 +11,12 @@ async def main():
     eth_interface = init_ethereum_interface()
     
     # Get the external tagged functions to use as tools
-    tools = []
-    for attr_name in dir(eth_interface):
-        attr = getattr(eth_interface, attr_name)
-        if callable(attr) and hasattr(attr, '_external_tagged'):
-            tools.append(attr)
+    tools = [
+        getattr(eth_interface, attr_name)
+        for attr_name in dir(eth_interface)
+        if callable(getattr(eth_interface, attr_name)) and 
+        hasattr(getattr(eth_interface, attr_name), '_external_tagged')
+    ]
 
     # Create an agent with the Ethereum tools
     agent = Agent(
@@ -24,15 +25,14 @@ async def main():
         system="""You are an expert in handling Ethereum transactions and token management.
         When asked about accounts or balances, always check the available addresses first.
         For any transaction, verify sufficient balances before proceeding.
-        Always provide clear explanations of what you're doing.""",
+        Always provide clear explanations of what you're doing.
+        If any operation fails, provide a clear error message and suggested resolution.""",
         output_format="tool",
         tools=tools,
         llm_config=LLMConfig(
-            #client="vllm",
-            #model="NousResearch/Hermes-3-Llama-3.1-8B",
             client="openai",
             model="gpt-4o-mini",
-            temperature=0
+            temperature=0.1  # Slight increase for more natural responses while maintaining consistency
         )
     )
 
@@ -43,11 +43,19 @@ async def main():
         "Show me the list of whitelisted ERC20 tokens",
     ]
 
-    # Execute tasks
+    # Execute tasks with error handling
     for task in tasks:
-        print(f"\nTask: {task}")
-        result = await agent.execute(task)
-        print(f"Result: {result}")
+        try:
+            print(f"\nTask: {task}")
+            result = await agent.execute(task)
+            print(f"Result: {result}")
+        except Exception as e:
+            print(f"Error executing task '{task}': {str(e)}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nOperation cancelled by user")
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
