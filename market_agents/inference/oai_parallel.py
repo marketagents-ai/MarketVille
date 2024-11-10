@@ -391,14 +391,13 @@ class APIRequest:
 
 # functions
 
-
 def api_endpoint_from_url(request_url: str) -> str:
     """
     Extracts the API endpoint from a given request URL.
 
     This function applies a regular expression search to find the API endpoint pattern within the provided URL.
     It supports extracting endpoints from standard OpenAI API URLs, custom Azure OpenAI deployment URLs,
-    and vLLM endpoints.
+    vLLM endpoints, and other API endpoints with custom ports.
 
     Parameters:
     - request_url (str): The full URL of the API request.
@@ -416,16 +415,21 @@ def api_endpoint_from_url(request_url: str) -> str:
       Output: "completions"
     - Input: "http://00.000.000.00:8000/v1/completions"
       Output: "completions"
+    - Input: "http://00.000.000.00:4000/chat/completions"
+      Output: "chat/completions"
     """
     match = re.search("^https://[^/]+/v\\d+/(.+)$", request_url)
     if match is None:
         # for Azure OpenAI deployment urls
         match = re.search(r"^https://[^/]+/openai/deployments/[^/]+/(.+?)(\?|$)", request_url)
         if match is None:
-            # for vLLM endpoints with localhost or IP address
+            # for vLLM endpoints with localhost or IP address and v1 path
             match = re.search(r"^http://(?:localhost|\d+\.\d+\.\d+\.\d+):\d+/v\d+/(.+)$", request_url)
             if match is None:
-                raise ValueError(f"Invalid URL: {request_url}")
+                # for endpoints with direct chat/completions path
+                match = re.search(r"^http://(?:localhost|\d+\.\d+\.\d+\.\d+):\d+/(.+)$", request_url)
+                if match is None:
+                    raise ValueError(f"Invalid URL: {request_url}")
     return match[1]
 
 
