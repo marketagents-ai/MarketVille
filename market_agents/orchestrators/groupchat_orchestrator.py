@@ -194,17 +194,15 @@ class GroupChatOrchestrator(BaseEnvironmentOrchestrator):
                 return_prompt=True  # Important: return the prompt instead of executing it
             )
             proposer_prompts.append(prompt)
-            proposer_agents.append(proposer)
+            proposer_agents.append((cohort_id, proposer))  # Store cohort_id with proposer
         
         # Run all prompts in parallel
         topic_proposals = await self.ai_utils.run_parallel_ai_completion(proposer_prompts, update_history=False)
         self.data_inserter.insert_ai_requests(self.ai_utils.get_all_requests())
         
         # Process each proposal
-        for proposal, proposer in zip(topic_proposals, proposer_agents):
+        for (cohort_id, proposer), proposal in zip(proposer_agents, topic_proposals):
             try:
-                cohort_id = next(cid for cid, agent in self.cohort_manager.topic_proposers.items() if agent.id == proposer.id)
-                
                 # Extract topic from proposal
                 if proposal.json_object:
                     action_content = proposal.json_object.object
@@ -235,10 +233,12 @@ class GroupChatOrchestrator(BaseEnvironmentOrchestrator):
                 self.trackers[cohort_id].add_topic(cohort_id, default_topic)
                 self.logger.warning(f"Using default topic for cohort {cohort_id}: {default_topic}")
 
+
     async def run_group_chat_sub_round(self, cohort_id: str, round_num: int, sub_round_num: int, cohort_agents: List[MarketAgent]):
         env = self.environments[cohort_id]
         tracker = self.trackers[cohort_id]
         topic = self.topics.get(cohort_id, "No Topic")
+        print(f"This is the TOPIC:\n {topic}")
         log_sub_round_start(self.logger, cohort_id, sub_round_num)
         # Set system messages for agents
         self.set_agent_system_messages(cohort_id, topic, round_num, sub_round_num=sub_round_num)
@@ -363,6 +363,24 @@ class GroupChatOrchestrator(BaseEnvironmentOrchestrator):
             except Exception as e:
                 self.logger.warning(f"Error in action generation for agent {agent.index}: {str(e)}")
         return action_prompts
+    
+    async def run_parallel_reflect(self, cohort_agents: List[MarketAgent]) -> List[Any]:
+        reflect_prompts = []
+        agents_with_observations = []
+        for agent in cohort_agents:
+            try:
+                if agent.last_observation:
+                    reflect_prompt = await agent.reflect(self.environment_name, return_prompt=True)
+                    if self.validate_prompt(reflect_prompt, agent.index):
+                        reflect_prompts.append(reflect_prompt)
+                        agents_with_observations.append(agent)
+                    else:
+                        self.logger.warning(f"Skipping invalid reflection prompt for agent {agent.index}")
+                else:
+                    self.logger.info(f"Skipping reflection for agent {agent.index} due to no observation")
+            except Exception as e:
+                self.logger.warning(f"Error in reflection for agent {agent.index}: {str(e)}")
+        return reflect_prompts, agents_with_observations
 
     async def run_reflection(self, round_num: int):
         # Run reflection for each cohort
@@ -427,15 +445,16 @@ class GroupChatOrchestrator(BaseEnvironmentOrchestrator):
             if agent.id == proposer.id and sub_round_num == 1:
                 # Topic proposer has a different role in sub-round 1
                 agent.system = (
-                    f"You are Agent {agent.index}, selected as the topic proposer for your cohort in round {round_num}. "
-                    f"The topic you proposed is: {topic}. In this sub-round, initiate the discussion on this topic."
+                    f"You are selected as the topic proposer for your cohort in round {round_num}. "
+                    f"In this sub-round, initiate the discussion on the topic you proposed. "
+                    f"\n## Topic\n {topic}"
                 )
             else:
                 agent.system = (
-                    f"You are Agent {agent.index} participating in sub-round {sub_round_num} of round {round_num} "
-                    f"You are in a group chat about topic: {topic}. Engage in the discussion with your cohort members."
+                    f"You are participating in sub-round {sub_round_num} of round {round_num}. "
+                    f"You are in a group chat about with the given topic, engage in the discussion with your cohort members."
+                    f"\n## Topic\n {topic}"
                 )
-
     def process_environment_state(self, env_state: EnvironmentStep, cohort_agents: List[MarketAgent], cohort_id: str):
         # Process messages and update agent observations
         global_observation = env_state.global_observation
