@@ -16,6 +16,7 @@ persona: |
   - Investment Experience: {investment_experience}
 
   ## Personality Traits
+  - Communication Style: {communication_style}
   - Decision Making Style: {decision_making_style}
   - Openness: {openness}
   - Conscientiousness: {conscientiousness}
@@ -25,6 +26,12 @@ persona: |
 
   ## Hobbies and Interests
   {hobbies_and_interests}
+
+  ## Routines
+  {routines}
+
+  ## Skills
+  {skills}
 
   ## Dynamic Attributes
   - Current Mood: {current_mood}

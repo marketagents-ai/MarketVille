@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List
+from typing import List, Dict
 import yaml
 import random
 from pathlib import Path
@@ -11,6 +11,9 @@ class Persona(BaseModel):
     persona: str
     objectives: List[str]
     trader_type: List[str]
+    communication_style: str
+    routines: List[str]
+    skills: List[str]
 
 def generate_persona() -> Persona:
     # Gender and Name
@@ -52,18 +55,68 @@ def generate_persona() -> Persona:
     # Role
     role = random.choice(["Buyer", "Seller"])
 
-    # Occupation Mapping
+    # Occupation Mapping with Routines and Skills
     occupation_data = {
-        'Doctor': {'education_levels': ["Master's", "PhD"], 'income_brackets': ["High"]},
-        'Engineer': {'education_levels': ["Bachelor's", "Master's", "PhD"], 'income_brackets': ["Medium", "High"]},
-        'Teacher': {'education_levels': ["Bachelor's", "Master's"], 'income_brackets': ["Low", "Medium"]},
-        'Artist': {'education_levels': ["High School", "Bachelor's"], 'income_brackets': ["Low", "Medium"]},
-        'Mechanic': {'education_levels': ["High School", "Associate's"], 'income_brackets': ["Low", "Medium"]},
-        'Scientist': {'education_levels': ["Master's", "PhD"], 'income_brackets': ["Medium", "High"]},
-        'Nurse': {'education_levels': ["Associate's", "Bachelor's"], 'income_brackets': ["Low", "Medium"]},
-        'Lawyer': {'education_levels': ["Master's", "PhD"], 'income_brackets': ["High"]},
-        'Salesperson': {'education_levels': ["High School", "Associate's", "Bachelor's"], 'income_brackets': ["Low", "Medium"]},
-        'Entrepreneur': {'education_levels': ["High School", "Bachelor's", "Master's"], 'income_brackets': ["Medium", "High"]}
+        'Doctor': {
+            'education_levels': ["Master's", "PhD"],
+            'income_brackets': ["High"],
+            'routines': ['Review patient charts', 'Perform surgeries', 'Attend medical conferences', 'Consult with patients', 'Supervise medical staff'],
+            'skills': ['Medical diagnosis', 'Surgery', 'Patient care', 'Medical research', 'Team management']
+        },
+        'Engineer': {
+            'education_levels': ["Bachelor's", "Master's", "PhD"],
+            'income_brackets': ["Medium", "High"],
+            'routines': ['Design systems', 'Write code', 'Attend team meetings', 'Debug software', 'Review code'],
+            'skills': ['Programming', 'Systems design', 'Problem-solving', 'Software development', 'Code optimization']
+        },
+        'Teacher': {
+            'education_levels': ["Bachelor's", "Master's"],
+            'income_brackets': ["Low", "Medium"],
+            'routines': ['Prepare lesson plans', 'Teach classes', 'Grade assignments', 'Meet with parents', 'Attend workshops'],
+            'skills': ['Instruction', 'Curriculum development', 'Classroom management', 'Communication', 'Assessment']
+        },
+        'Artist': {
+            'education_levels': ["High School", "Bachelor's"],
+            'income_brackets': ["Low", "Medium"],
+            'routines': ['Create artworks', 'Attend exhibitions', 'Market artwork', 'Collaborate with other artists', 'Research new techniques'],
+            'skills': ['Creativity', 'Artistic skills', 'Marketing', 'Networking', 'Critical thinking']
+        },
+        'Mechanic': {
+            'education_levels': ["High School", "Associate's"],
+            'income_brackets': ["Low", "Medium"],
+            'routines': ['Inspect vehicles', 'Repair engines', 'Order parts', 'Maintain equipment', 'Provide customer service'],
+            'skills': ['Mechanical knowledge', 'Problem-solving', 'Technical skills', 'Customer service', 'Attention to detail']
+        },
+        'Scientist': {
+            'education_levels': ["Master's", "PhD"],
+            'income_brackets': ["Medium", "High"],
+            'routines': ['Conduct experiments', 'Analyze data', 'Publish papers', 'Attend conferences', 'Collaborate with peers'],
+            'skills': ['Research', 'Data analysis', 'Scientific writing', 'Critical thinking', 'Collaboration']
+        },
+        'Nurse': {
+            'education_levels': ["Associate's", "Bachelor's"],
+            'income_brackets': ["Low", "Medium"],
+            'routines': ['Monitor patient health', 'Administer medications', 'Update records', 'Assist doctors', 'Educate patients'],
+            'skills': ['Patient care', 'Medical knowledge', 'Compassion', 'Attention to detail', 'Communication']
+        },
+        'Lawyer': {
+            'education_levels': ["Master's", "PhD"],
+            'income_brackets': ["High"],
+            'routines': ['Meet clients', 'Prepare legal documents', 'Represent clients in court', 'Research case law', 'Negotiate settlements'],
+            'skills': ['Legal knowledge', 'Negotiation', 'Analytical thinking', 'Public speaking', 'Writing']
+        },
+        'Salesperson': {
+            'education_levels': ["High School", "Associate's", "Bachelor's"],
+            'income_brackets': ["Low", "Medium"],
+            'routines': ['Contact potential clients', 'Present products', 'Negotiate deals', 'Follow up with customers', 'Meet sales targets'],
+            'skills': ['Communication', 'Persuasion', 'Negotiation', 'Customer service', 'Time management']
+        },
+        'Entrepreneur': {
+            'education_levels': ["High School", "Bachelor's", "Master's"],
+            'income_brackets': ["Medium", "High"],
+            'routines': ['Develop business strategies', 'Meet with investors', 'Manage team', 'Oversee operations', 'Analyze market trends'],
+            'skills': ['Leadership', 'Strategic planning', 'Risk management', 'Networking', 'Financial literacy']
+        }
     }
 
     # Select occupation and corresponding data
@@ -157,6 +210,29 @@ def generate_persona() -> Persona:
     long_term_goals_str = ", ".join(financial_objectives["long_term_goals"])
     investment_preferences_str = ", ".join(financial_objectives["investment_preferences"])
 
+    # Routines and Skills
+    routines_list = occupation_info['routines']
+    skills_list = occupation_info['skills']
+
+    routines = random.sample(routines_list, k=3) if len(routines_list) >= 3 else routines_list
+    skills = random.sample(skills_list, k=3) if len(skills_list) >= 3 else skills_list
+
+    routines_str = ", ".join(routines)
+    skills_str = ", ".join(skills)
+
+    # Communication Style
+    decision_making_to_communication = {
+        "Rational": ["Direct", "Formal"],
+        "Emotional": ["Persuasive", "Friendly", "Informal"],
+        "Impulsive": ["Informal", "Direct"],
+        "Collaborative": ["Friendly", "Persuasive"]
+    }
+
+    communication_styles = ["Direct", "Persuasive", "Reserved", "Friendly", "Formal", "Informal"]
+    decision_making_style = personality_traits["decision_making_style"]
+    communication_style_options = decision_making_to_communication.get(decision_making_style, communication_styles)
+    communication_style = random.choice(communication_style_options)
+
     # Read Persona Template as YAML and extract content under 'persona'
     with open('./market_agents/agents/personas/persona_template.yaml', 'r') as file:
         template_yaml = yaml.safe_load(file)
@@ -195,7 +271,10 @@ def generate_persona() -> Persona:
         short_term_goals=short_term_goals_str,
         long_term_goals=long_term_goals_str,
         risk_appetite=risk_appetite,
-        investment_preferences=investment_preferences_str
+        investment_preferences=investment_preferences_str,
+        communication_style=communication_style,
+        routines=routines_str,
+        skills=skills_str
     )
 
     # Objectives
@@ -212,7 +291,10 @@ def generate_persona() -> Persona:
         role=role,
         persona=persona_description,
         objectives=objectives,
-        trader_type=trader_type
+        trader_type=trader_type,
+        communication_style=communication_style,
+        routines=routines,
+        skills=skills
     )
 
 def save_persona_to_file(persona: Persona, output_dir: Path):
@@ -224,7 +306,10 @@ def save_persona_to_file(persona: Persona, output_dir: Path):
         'role': persona.role,
         'persona': persona.persona,
         'objectives': persona.objectives,
-        'trader_type': persona.trader_type
+        'trader_type': persona.trader_type,
+        'communication_style': persona.communication_style,
+        'routines': persona.routines,
+        'skills': persona.skills
     }
 
     # Custom YAML dumper to force literal block style for the persona field
