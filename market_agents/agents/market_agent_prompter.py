@@ -7,7 +7,7 @@ import os
 def json_to_markdown(data: Union[Dict, List, Any], indent: int = 0) -> str:
     """Convert JSON/dict data to a markdown formatted string."""
     if data is None:
-        return "N/A"
+        return "None"
     
     if isinstance(data, str):
         # Clean up newlines and escape characters for markdown compatibility
@@ -16,39 +16,31 @@ def json_to_markdown(data: Union[Dict, List, Any], indent: int = 0) -> str:
     if isinstance(data, (int, float, bool)):
         return str(data)
     
+    indent_str = "  " * indent
     if isinstance(data, list):
         if not data:
-            return "[]"
-        markdown = "\n"
+            return "None"
+        markdown = ""
         for item in data:
-            if isinstance(item, (dict, list)):
-                # Handle nested structures
-                item_str = json_to_markdown(item, indent + 1)
-                markdown += "  " * indent + "- " + item_str.lstrip() + "\n"
-            else:
-                # Handle simple values
-                item_str = json_to_markdown(item, indent + 1)
-                markdown += "  " * indent + "- " + item_str + "\n"
+            item_str = json_to_markdown(item, indent + 1)
+            markdown += f"{indent_str}- {item_str}\n"
         return markdown.rstrip()
     
     if isinstance(data, dict):
         if not data:
-            return "{}"
-        markdown = "\n"
+            return "None"
+        markdown = ""
         for key, value in data.items():
-            key_str = str(key)  # No need to JSON escape keys in markdown
             value_str = json_to_markdown(value, indent + 1)
-            
-            if isinstance(value, (dict, list)):
-                # For nested structures, maintain proper indentation
-                markdown += "  " * indent + f"{key_str}:{value_str}\n"
+            if isinstance(value, (dict, list)) and value:
+                markdown += f"{indent_str}{key}:\n{value_str}\n"
             else:
-                # For simple values, use key: value format
-                markdown += "  " * indent + f"{key_str}: {value_str}\n"
+                markdown += f"{indent_str}{key}: {value_str}\n"
         return markdown.rstrip()
     
     # For any other types, convert to string
     return str(data)
+
 
 class AgentPromptVariables(BaseModel):
     environment_name: str
@@ -87,7 +79,8 @@ class MarketAgentPromptManager(BaseModel):
             if value is None or (isinstance(value, (list, dict)) and not value):
                 formatted_vars[key] = "N/A"
             elif isinstance(value, (dict, list)):
-                formatted_vars[key] = json_to_markdown(value)
+                # Convert dict/list values to markdown format
+                formatted_vars[key] = json_to_markdown(value).strip()
             else:
                 formatted_vars[key] = str(value) if value else "N/A"
         
