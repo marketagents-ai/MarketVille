@@ -1,3 +1,8 @@
+# ignore everything in agent_evm_testnet EXCEPT hardhat-daemon.sh, pyproject.toml, and README.md
+/agent_evm_testnet/hardhat-testnet/*
+/agent_evm_testnet/hardhat-testnet/
+
+
 # Logs
 logs
 *.log
