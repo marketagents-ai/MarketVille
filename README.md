@@ -3,29 +3,25 @@ an agent based market simulation
 
 
 ## EMV Testnet
-* install nodejs
-* `poetry install`
+* `./hardhat-daemon.sh start`
 * `poetry shell`
-* `./run_node.sh ganache_config.json start`
-* `./run_node.sh ganache_config.json start`
-* ganache is now running
-* `python init_sim.py` launches test tokens and mints to addresses
+* `poetry install`
+* `python testnet_deployer.py`
 
+at this point hardhat testnet should be running with an orderbook with some orders on it.
 
-## Other `run_node.sh` commands:
-* start: starts node
-* stop: stops node
-* restart: restarts node
-* status: shows node status
-* regen-keys: regenerates the wallets in the config
+this will generate 2 files:
+* `../.mnemonic` <- mnemonic used to init the network
+* `../testnet_data.json` <- contains ABIs and addresses
 
 
 ## EVM Agent Interface
-* all functions are available in `agent_evm_interface/agent_evm_interface.py`
-* keep `@external` and `@init` tags, and function description in that format if you want to remain compatible with the function context system
-* run `agent_evm_interface_example.py` to test node
+* need access to `.mnemonic` and `testnet_data.json` (leave in the current structure and all is well)
 
 
+## Test Agent Interface
+* `cd agent_evm_interface`
+* `python agent_evm_interface.py`
 
 
 NOTE: early version, probably has bugs, especially during install
