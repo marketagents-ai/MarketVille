@@ -31,10 +31,11 @@ echo "Dashboard is running. Access it at http://localhost:8000"
 # Get the start time
 start_time=$(date +%s)
 
-# Run the orchestrator script and print its output in real-time
+# Run the orchestrator script and print its output in rea
+l-time
 echo "Starting market simulation with parallel orchestration..."
 python3 "$ORCHESTRATOR_SCRIPT" --environments group_chat auction 2>&1 | tee simulation_output.log
-#python3 "$ORCHESTRATOR_SCRIPT" --environments auction 2>&1 | tee simulation_output.log
+# python3 "$ORCHESTRATOR_SCRIPT" --environments auction 2>&1 | tee simulation_output.log
 orchestrator_exit_code=${PIPESTATUS[0]}
 
 # Get the end time for the orchestrator
