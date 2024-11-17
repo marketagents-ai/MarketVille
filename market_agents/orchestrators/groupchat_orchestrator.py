@@ -194,17 +194,15 @@ class GroupChatOrchestrator(BaseEnvironmentOrchestrator):
                 return_prompt=True  # Important: return the prompt instead of executing it
             )
             proposer_prompts.append(prompt)
-            proposer_agents.append(proposer)
+            proposer_agents.append((cohort_id, proposer))  # Store cohort_id with proposer
         
         # Run all prompts in parallel
         topic_proposals = await self.ai_utils.run_parallel_ai_completion(proposer_prompts, update_history=False)
         self.data_inserter.insert_ai_requests(self.ai_utils.get_all_requests())
         
         # Process each proposal
-        for proposal, proposer in zip(topic_proposals, proposer_agents):
+        for (cohort_id, proposer), proposal in zip(proposer_agents, topic_proposals):
             try:
-                cohort_id = next(cid for cid, agent in self.cohort_manager.topic_proposers.items() if agent.id == proposer.id)
-                
                 # Extract topic from proposal
                 if proposal.json_object:
                     action_content = proposal.json_object.object
@@ -235,10 +233,12 @@ class GroupChatOrchestrator(BaseEnvironmentOrchestrator):
                 self.trackers[cohort_id].add_topic(cohort_id, default_topic)
                 self.logger.warning(f"Using default topic for cohort {cohort_id}: {default_topic}")
 
+
     async def run_group_chat_sub_round(self, cohort_id: str, round_num: int, sub_round_num: int, cohort_agents: List[MarketAgent]):
         env = self.environments[cohort_id]
         tracker = self.trackers[cohort_id]
         topic = self.topics.get(cohort_id, "No Topic")
+        print(f"This is the TOPIC:\n {topic}")
         log_sub_round_start(self.logger, cohort_id, sub_round_num)
         # Set system messages for agents
         self.set_agent_system_messages(cohort_id, topic, round_num, sub_round_num=sub_round_num)
@@ -253,8 +253,8 @@ class GroupChatOrchestrator(BaseEnvironmentOrchestrator):
             perception = perceptions_map.get(agent.id)
             if perception:
                 log_persona(self.logger, agent.index, agent.persona)
-                log_perception(self.logger, agent.index, f"{perception.str_content}")
-                agent.last_perception = perception.str_content
+                log_perception(self.logger, agent.index, perception.json_object.object if perception and perception.json_object else None)
+                agent.last_perception = perception.json_object.object if perception and perception.json_object else ""
             else:
                 self.logger.warning(f"No perception found for agent {agent.index}")
                 agent.last_perception = ""
@@ -311,19 +311,76 @@ class GroupChatOrchestrator(BaseEnvironmentOrchestrator):
         # Store the last environment state
         self.last_env_state = env_state
 
+    def validate_prompt(self, prompt: Any, agent_index: int = None) -> bool:
+        """Validate if a prompt is valid JSON and properly formatted."""
+        if not isinstance(prompt, str):
+            return True
+            
+        try:
+            # Try to parse as JSON and ensure there's no extra data
+            decoded = json.loads(prompt)
+            # Verify that the entire string was consumed (no extra data)
+            json.loads(prompt, strict=True)  # This will fail if there's extra data
+            return True
+        except json.JSONDecodeError as e:
+            self.logger.warning(f"Invalid JSON for agent {agent_index}. Error: {str(e)}")
+            if hasattr(e, 'pos'):
+                self.logger.debug(f"Problem at character {e.pos}: {prompt[max(0, e.pos-50):e.pos+50]}")
+            return False
+        except Exception as e:
+            self.logger.warning(f"Unexpected error validating prompt for agent {agent_index}: {str(e)}")
+            return False
+
     async def run_parallel_perceive(self, cohort_agents: List[MarketAgent], cohort_id: str) -> List[Any]:
         perceive_prompts = []
         for agent in cohort_agents:
-            perceive_prompt = await agent.perceive(self.environment_name, return_prompt=True)
-            perceive_prompts.append(perceive_prompt)
+            try:
+                perceive_prompt = await agent.perceive(self.environment_name, return_prompt=True)
+                if self.validate_prompt(perceive_prompt, agent.index):
+                    perceive_prompts.append(perceive_prompt)
+                else:
+                    self.logger.warning(f"Skipping invalid perception prompt for agent {agent.index}")
+            except Exception as e:
+                self.logger.warning(f"Error in perception for agent {agent.index}: {str(e)}")
         return perceive_prompts
 
     async def run_parallel_generate_action(self, cohort_agents: List[MarketAgent], perceptions: List[str]) -> List[Any]:
         action_prompts = []
+        valid_perceptions = []
         for agent, perception in zip(cohort_agents, perceptions):
-            action_prompt = await agent.generate_action(self.environment_name, perception, return_prompt=True)
-            action_prompts.append(action_prompt)
+            try:
+                action_prompt = await agent.generate_action(self.environment_name, perception, return_prompt=True)
+                # Double validation - both the perception and action prompt
+                if isinstance(perception, str) and not self.validate_prompt(perception, agent.index):
+                    self.logger.warning(f"Skipping agent {agent.index} due to invalid perception")
+                    continue
+                    
+                if self.validate_prompt(action_prompt, agent.index):
+                    action_prompts.append(action_prompt)
+                    valid_perceptions.append(perception)
+                else:
+                    self.logger.warning(f"Skipping invalid action prompt for agent {agent.index}")
+            except Exception as e:
+                self.logger.warning(f"Error in action generation for agent {agent.index}: {str(e)}")
         return action_prompts
+    
+    async def run_parallel_reflect(self, cohort_agents: List[MarketAgent]) -> List[Any]:
+        reflect_prompts = []
+        agents_with_observations = []
+        for agent in cohort_agents:
+            try:
+                if agent.last_observation:
+                    reflect_prompt = await agent.reflect(self.environment_name, return_prompt=True)
+                    if self.validate_prompt(reflect_prompt, agent.index):
+                        reflect_prompts.append(reflect_prompt)
+                        agents_with_observations.append(agent)
+                    else:
+                        self.logger.warning(f"Skipping invalid reflection prompt for agent {agent.index}")
+                else:
+                    self.logger.info(f"Skipping reflection for agent {agent.index} due to no observation")
+            except Exception as e:
+                self.logger.warning(f"Error in reflection for agent {agent.index}: {str(e)}")
+        return reflect_prompts, agents_with_observations
 
     async def run_reflection(self, round_num: int):
         # Run reflection for each cohort
@@ -337,8 +394,7 @@ class GroupChatOrchestrator(BaseEnvironmentOrchestrator):
             self.data_inserter.insert_ai_requests(self.ai_utils.get_all_requests())
             for agent, reflection in zip(agents_with_observations, reflections):
                 if reflection.json_object:
-                    log_reflection(self.logger, agent.index, f"{reflection.json_object.object}")
-                    
+                    log_reflection(self.logger, agent.index, reflection.json_object.object)                    
                     # Extract rewards similar to auction orchestrator
                     environment_reward = agent.last_step.info.get('agent_rewards', {}).get(agent.id, 0.0) if agent.last_step else 0.0
                     self_reward = reflection.json_object.object.get("self_reward", 0.0)
@@ -373,18 +429,6 @@ class GroupChatOrchestrator(BaseEnvironmentOrchestrator):
         else:
             self.logger.info(f"No reflections generated for cohort {cohort_id} in this round.")
 
-    async def run_parallel_reflect(self, cohort_agents: List[MarketAgent]) -> List[Any]:
-        reflect_prompts = []
-        agents_with_observations = []
-        for agent in cohort_agents:
-            if agent.last_observation:
-                reflect_prompt = await agent.reflect(self.environment_name, return_prompt=True)
-                reflect_prompts.append(reflect_prompt)
-                agents_with_observations.append(agent)
-            else:
-                self.logger.info(f"Skipping reflection for agent {agent.index} due to no observation")
-        return reflect_prompts, agents_with_observations
-
     def set_proposer_system_message(self, proposer: MarketAgent, cohort_id: str):
         # Set system message for the topic proposer
         proposer.system = (
@@ -401,15 +445,16 @@ class GroupChatOrchestrator(BaseEnvironmentOrchestrator):
             if agent.id == proposer.id and sub_round_num == 1:
                 # Topic proposer has a different role in sub-round 1
                 agent.system = (
-                    f"You are Agent {agent.index}, selected as the topic proposer for your cohort in round {round_num}. "
-                    f"The topic you proposed is '{topic}'. In this sub-round, initiate the discussion on this topic."
+                    f"You are selected as the topic proposer for your cohort in round {round_num}. "
+                    f"In this sub-round, initiate the discussion on the topic you proposed. "
+                    f"\n## Topic\n {topic}"
                 )
             else:
                 agent.system = (
-                    f"You are Agent {agent.index} participating in sub-round {sub_round_num} of round {round_num} "
-                    f"in a group chat about '{topic}'. Engage in the discussion with your cohort members."
+                    f"You are participating in sub-round {sub_round_num} of round {round_num}. "
+                    f"You are in a group chat about with the given topic, engage in the discussion with your cohort members."
+                    f"\n## Topic\n {topic}"
                 )
-
     def process_environment_state(self, env_state: EnvironmentStep, cohort_agents: List[MarketAgent], cohort_id: str):
         # Process messages and update agent observations
         global_observation = env_state.global_observation

@@ -44,7 +44,7 @@ jspm_packages/
 
 # Snowpack dependency directory (https://snowpack.dev/)
 web_modules/
-
+output/
 # TypeScript cache
 *.tsbuildinfo
 
@@ -71,14 +71,14 @@ web_modules/
 
 # Yarn Integrity file
 .yarn-integrity
-
+outputs/inference_cache
 # dotenv environment variable files
 .env
 .env.development.local
 .env.test.local
 .env.production.local
 .env.local
-
+market_agents/agents/personas/generated_personas/
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 .parcel-cache

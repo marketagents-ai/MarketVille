@@ -135,8 +135,8 @@ class AuctionOrchestrator(BaseEnvironmentOrchestrator):
             perception = perceptions_map.get(agent.id)
             if perception:
                 log_persona(self.logger, agent.index, agent.persona)
-                log_perception(self.logger, agent.index, f"{perception.json_object.object if perception.json_object else perception.str_content}")
-                agent.last_perception = perception.json_object.object if perception.json_object else None
+                log_perception(self.logger, agent.index, perception.json_object.object if perception and perception.json_object else None)
+                agent.last_perception = perception.json_object.object if perception and perception.json_object else ""
             else:
                 self.logger.warning(f"No perception found for agent {agent.index}")
                 agent.last_perception = None
@@ -240,7 +240,7 @@ class AuctionOrchestrator(BaseEnvironmentOrchestrator):
 
             for agent, reflection in zip(agents_with_observations, reflections):
                 if reflection.json_object:
-                    log_reflection(self.logger, agent.index, f"{reflection.json_object.object}")
+                    log_reflection(self.logger, agent.index, reflection.json_object.object)                    
                     # Access the surplus from agent's last_step.info
                     environment_reward = agent.last_step.info.get('agent_rewards', {}).get(agent.id, 0.0) if agent.last_step else 0.0
                     self_reward = reflection.json_object.object.get("self_reward", 0.0)

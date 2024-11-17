@@ -35,7 +35,7 @@ from market_agents.orchestrators.logger_utils import (
     log_agent_init,
     log_round,
     print_ascii_art,
-    orchestartion_logger,
+    orchestration_logger,
     log_completion
 )
 
@@ -47,7 +47,7 @@ class MetaOrchestrator:
         self.agents: List[MarketAgent] = []
         self.ai_utils = self._initialize_ai_utils()
         self.data_inserter = self._initialize_data_inserter()
-        self.logger = orchestartion_logger
+        self.logger = orchestration_logger
         self.environment_order = environment_order or config.environment_order
         self.environment_orchestrators = {}
 
