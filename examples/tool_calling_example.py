@@ -30,8 +30,8 @@ async def main():
         output_format="tool",
         tools=tools,
         llm_config=LLMConfig(
-            client="openai",
-            model="gpt-4o-mini",
+            client="vllm",
+            model="Nexusflow/Athene-V2-Agent",
             temperature=0.1  # Slight increase for more natural responses while maintaining consistency
         )
     )
@@ -46,11 +46,11 @@ async def main():
     # Execute tasks with error handling
     for task in tasks:
         try:
-            print(f"\nTask: {task}")
+            print(f"\n\033[94mTask: {task}\033[0m")  # Blue color for tasks
             result = await agent.execute(task)
-            print(f"Result: {result}")
+            print(f"\033[92mResult: {result}\033[0m")  # Green color for results
         except Exception as e:
-            print(f"Error executing task '{task}': {str(e)}")
+            print(f"\033[91mError executing task '{task}': {str(e)}\033[0m")  # Red color for errors
 
 if __name__ == "__main__":
     try:
