@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "agent_eth_testnet"
+name = "agent_evm_testnet"
 version = "0.1.0"
 description = ""
 authors = ["C0deMunk33 <hollandcodeandgraphics@gmail.com>"]
@@ -14,3 +14,4 @@ py-solc-x = "^2.0.3"
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
+package-mode = false

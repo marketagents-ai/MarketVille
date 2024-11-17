@@ -2,6 +2,7 @@ import json
 from web3 import Web3
 from eth_account import Account
 import random
+import os
 
 
 def external(func):
@@ -15,11 +16,18 @@ class EthereumInterface:
     def __init__(self, rpc_url: str = "http://localhost:8545"):
         self.rpc_url = rpc_url
 
-        # load ../.mnemonic
-        with open('../.mnemonic', 'r') as f:
+        # Get the absolute path to the project root directory
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        root_dir = os.path.dirname(current_dir)
+
+        # Load mnemonic from project root
+        mnemonic_path = os.path.join(root_dir, '.mnemonic')
+        with open(mnemonic_path, 'r') as f:
             self.mnemonic = f.read().strip()
 
-        with open( '../testnet_data.json', 'r') as f:
+        # Load testnet data from project root 
+        testnet_data_path = os.path.join(root_dir, 'testnet_data.json')
+        with open(testnet_data_path, 'r') as f:
             self.testnet_data = json.load(f)
         
         # TODO: maybe find a better way to do this:
