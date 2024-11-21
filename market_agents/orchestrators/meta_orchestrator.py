@@ -216,7 +216,7 @@ class MetaOrchestrator:
                 continue
             
             # Initialize environment for this orchestrator
-            orchestrator.setup_environment()
+            #orchestrator.setup_environment()
             orchestrators[env_name] = orchestrator
             self.logger.info(f"Initialized {env_name} environment")
             
@@ -228,10 +228,16 @@ class MetaOrchestrator:
         return orchestrators
 
     async def run_simulation(self):
-        # Initialize environment orchestrators once at the start
+        # Initialize environment orchestrators
         self.environment_orchestrators = self._initialize_environment_orchestrators()
         
-        # Run simulation rounds - each round includes both environments in sequence
+        # Set up each environment before starting simulation
+        for env_name, orchestrator in self.environment_orchestrators.items():
+            self.logger.info(f"Setting up {env_name} environment...")
+            await orchestrator.setup_environment()  # Properly await setup
+            self.logger.info(f"Setup complete for {env_name} environment")
+        
+        # Run simulation rounds - each round includes environments in sequence
         for round_num in range(1, self.config.max_rounds + 1):
             log_round(self.logger, round_num)
             
