@@ -30,6 +30,7 @@ class GroupChatConfig(BaseModel):
     address: str
     max_rounds: int
     initial_topic: str
+    groupchat_api_url: str = Field(default="http://localhost:8001")
     sub_rounds: int = Field(default=3)
     group_size: int = Field(default=100)
 
