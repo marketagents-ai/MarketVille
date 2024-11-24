@@ -65,14 +65,43 @@ class AgentCognitiveProcessor:
                     # Log reflection
                     log_reflection(self.logger, agent.index, reflection.json_object.object)
                     
+                    # Get environment reward if available
+                    environment_reward = agent.last_step.info.get('agent_rewards', {}).get(agent.id, 0.0) if agent.last_step else None
+                    self_reward = reflection.json_object.object.get("self_reward", 0.0)
+                    
+                    # Calculate total reward only if environment reward exists
+                    total_reward = None
+                    if environment_reward is not None:
+                        # Normalize environment reward
+                        normalized_environment_reward = environment_reward / (1 + abs(environment_reward))
+                        normalized_environment_reward = max(0.0, min(normalized_environment_reward, 1.0))
+                        total_reward = normalized_environment_reward * 0.5 + self_reward * 0.5
+                        
+                        # Log rewards
+                        self.logger.info(
+                            f"Agent {agent.index} rewards - Environment Reward: {environment_reward}, "
+                            f"Normalized Environment Reward: {normalized_environment_reward}, "
+                            f"Self Reward: {self_reward}, Total Reward: {total_reward}"
+                        )
+                    
                     # Store in agent memory
-                    agent.memory.append({
+                    memory_entry = {
                         "type": "reflection",
                         "content": reflection.json_object.object.get("reflection", ""),
                         "strategy_update": reflection.json_object.object.get("strategy_update", ""),
                         "observation": agent.last_observation,
+                        "self_reward": round(self_reward, 4),
                         "timestamp": datetime.now().isoformat()
-                    })
+                    }
+                    
+                    # Add environment rewards if available
+                    if environment_reward is not None:
+                        memory_entry.update({
+                            "environment_reward": round(environment_reward, 4),
+                            "total_reward": round(total_reward, 4)
+                        })
+                        
+                    agent.memory.append(memory_entry)
                 else:
                     self.logger.warning(f"No reflection JSON object for agent {agent.index}")
         else:
