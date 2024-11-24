@@ -28,6 +28,8 @@ class CryptoEconomicAgent(BaseEconomicAgent):
     risk_aversion: float = Field(default=0.5)
     expected_return: float = Field(default=0.05)
     coin: str = Field(default="DOGE")
+    ethereum_address: str = Field(default="")
+    private_key: str = Field(default="")
 
     def archive_endowment(self, new_portfolio: Optional[Portfolio] = None):
         self.archived_endowments.append(self.endowment.model_copy(deep=True))
@@ -39,6 +41,31 @@ class CryptoEconomicAgent(BaseEconomicAgent):
                 update={"trades": [], "initial_portfolio": new_portfolio}
             )
         self.endowment = new_endowment
+
+    @property
+    def eth_balance(self) -> float:
+        """Current ETH balance from endowment"""
+        return self.endowment.current_portfolio.cash
+
+    @property
+    def initial_eth_balance(self) -> float:
+        """Initial ETH balance from endowment"""
+        return self.endowment.initial_portfolio.cash
+
+    @property
+    def token_balance(self) -> int:
+        """Current token (DOGE) balance from endowment"""
+        return self.endowment.current_portfolio.get_crypto_quantity(self.coin)
+
+    @property
+    def initial_token_balance(self) -> int:
+        """Initial token (DOGE) balance from endowment"""
+        return self.endowment.initial_portfolio.get_crypto_quantity(self.coin)
+
+    @property
+    def id(self) -> str:
+        """Ensure agent has an id property"""
+        return str(self._id) if hasattr(self, '_id') else str(uuid.uuid4())
 
     @computed_field
     @property

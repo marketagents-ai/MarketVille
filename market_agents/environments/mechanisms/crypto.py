@@ -2,14 +2,15 @@
 
 import logging
 import random
-from typing import Any, List, Dict, Union, Type, Optional, Tuple
-from market_agents.memecoin_orchestrators.crypto_agent import CryptoEconomicAgent
-from pydantic import BaseModel, Field, field_validator
+from typing import Any, List, Dict, Type, Optional, Tuple
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from market_agents.environments.environment import (
     EnvironmentHistory, Mechanism, LocalAction, GlobalAction, LocalObservation, GlobalObservation,
     EnvironmentStep, ActionSpace, ObservationSpace, MultiAgentEnvironment
 )
-from market_agents.memecoin_orchestrators.crypto_models import OrderType, MarketAction, CryptoOrder, Trade
+from market_agents.memecoin_orchestrators.crypto_models import OrderType, MarketAction, Trade
+from market_agents.memecoin_orchestrators.crypto_agent import CryptoEconomicAgent
+from agent_evm_interface.agent_evm_interface import EthereumInterface
 logger = logging.getLogger(__name__)
 
 
@@ -25,8 +26,11 @@ class CryptoMarketAction(LocalAction):
 
     @field_validator('action')
     def validate_action(cls, v):
-        if v.order_type in [OrderType.BUY, OrderType.SELL] and (v.quantity <= 0 or v.price <= 0):
-            raise ValueError("Quantity and price must be positive for buy and sell orders")
+        if v.order_type in [OrderType.BUY, OrderType.SELL]:
+            if v.quantity <= 0:
+                raise ValueError("Quantity must be positive for buy and sell orders")
+            if v.price <= 0:
+                raise ValueError("Price must be positive for buy and sell orders")
         return v
 
     @classmethod
@@ -52,9 +56,11 @@ class GlobalCryptoMarketAction(GlobalAction):
 class CryptoMarketObservation(BaseModel):
     trades: List[Trade] = Field(default_factory=list, description="List of trades the agent participated in")
     market_summary: MarketSummary = Field(default_factory=MarketSummary, description="Summary of market activity")
-    order_book_summary: Dict[str, List[Tuple[float, int]]] = Field(default_factory=dict, description="Summary of order book")
     current_price: float = Field(default=0.1, description="Current market price")
     portfolio_value: float = Field(default=0.0, description="Total value of the agent's portfolio")
+    eth_balance: int = Field(default=0, description="Agent's ETH balance")
+    token_balance: int = Field(default=0, description="Agent's token balance")
+    price_history: List[float] = Field(default_factory=list, description="Historical prices")
 
 
 class CryptoMarketLocalObservation(LocalObservation):
@@ -65,8 +71,8 @@ class CryptoMarketGlobalObservation(GlobalObservation):
     observations: Dict[str, CryptoMarketLocalObservation]
     all_trades: List[Trade] = Field(default_factory=list, description="All trades executed in this round")
     market_summary: MarketSummary = Field(default_factory=MarketSummary, description="Summary of market activity")
-    order_book_summary: Dict[str, List[Tuple[float, int]]] = Field(default_factory=dict, description="Summary of order book")
     current_price: float = Field(default=0.1, description="Current market price")
+    price_history: List[float] = Field(default_factory=list, description="Historical prices")
 
 
 class CryptoMarketActionSpace(ActionSpace):
@@ -85,24 +91,37 @@ class CryptoMarketMechanism(Mechanism):
     max_rounds: int = Field(default=100, description="Maximum number of trading rounds")
     current_round: int = Field(default=0, description="Current round number")
     trades: List[Trade] = Field(default_factory=list, description="List of executed trades")
-    order_book_buy: List[CryptoOrder] = Field(default_factory=list, description="List of buy orders")
-    order_book_sell: List[CryptoOrder] = Field(default_factory=list, description="List of sell orders")
-    coin: str = Field(default="DOGE", description="Cryptocurrency being traded")
+    coin_name: str = Field(default="DOGE", description="Cryptocurrency being traded")
     current_price: float = Field(default=0.1, description="Current market price")
     price_history: List[float] = Field(default_factory=lambda: [0.1])
     sequential: bool = Field(default=False, description="Whether the mechanism is sequential")
     agent_registry: Dict[str, Any] = Field(default_factory=dict, description="Registry of agents")
+    ethereum_interface: EthereumInterface = Field(default_factory=EthereumInterface, description="Ethereum Interface")
+    token_addresses: Dict[str, str] = Field(default_factory=dict, description="Token addresses")
+    orderbook_address: str = Field(default="", description="Orderbook contract address")
+    minter_private_key: str = Field(default="", description="Private key of the minter account")
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+    def setup(self):
+        """Initialize token addresses and other blockchain parameters."""
+        self.token_addresses = self.ethereum_interface.testnet_data['token_addresses']
+        self.orderbook_address = self.ethereum_interface.testnet_data['orderbook_address']
+        self.minter_private_key = self.ethereum_interface.accounts[0]['private_key']  # Use the first account as minter
 
     def step(self, action: GlobalCryptoMarketAction) -> EnvironmentStep:
         self.current_round += 1
-        self._update_order_book(action.actions)
-        new_trades = self._match_orders()
+
+        # Process actions (buy/sell/hold) using the EthereumInterface
+        new_trades = self._process_actions(action.actions)
         self.trades.extend(new_trades)
+
+        # Update price based on recent trades
         self._update_price(new_trades)
 
         market_summary = self._create_market_summary(new_trades)
-        order_book_summary = self._get_order_book_summary()
-        observations = self._create_observations(new_trades, market_summary, order_book_summary)
+        observations = self._create_observations(market_summary)
         done = self.current_round >= self.max_rounds
 
         return EnvironmentStep(
@@ -110,108 +129,143 @@ class CryptoMarketMechanism(Mechanism):
                 observations=observations,
                 all_trades=new_trades,
                 market_summary=market_summary,
-                order_book_summary=order_book_summary,
-                current_price=self.current_price
+                current_price=self.current_price,
+                price_history=self.price_history
             ),
             done=done,
             info={"current_round": self.current_round}
         )
 
-    def _update_order_book(self, actions: Dict[str, CryptoMarketAction]):
-        for agent_id, action in actions.items():
-            order = CryptoOrder(
-                agent_id=agent_id,
-                order_type=action.action.order_type,
-                price=action.action.price,
-                quantity=action.action.quantity
-            )
-            if order.is_buy_order:
-                self.order_book_buy.append(order)
-            elif order.order_type == OrderType.SELL:
-                self.order_book_sell.append(order)
-
-    def _match_orders(self) -> List[Trade]:
+    def _process_actions(self, actions: Dict[str, CryptoMarketAction]) -> List[Trade]:
         trades = []
-        trade_id = len(self.trades)
+        for agent_id, action in actions.items():
+            agent = self.agent_registry.get(agent_id)
+            if not agent:
+                logger.error(f"Agent {agent_id} not found in registry.")
+                continue
 
-        # Sort buy and sell orders
-        self.order_book_buy.sort(key=lambda x: (-x.price, x.agent_id))
-        self.order_book_sell.sort(key=lambda x: (x.price, x.agent_id))
+            market_action = action.action
+            if market_action.order_type == OrderType.HOLD:
+                logger.info(f"Agent {agent_id} holds.")
+                continue
 
-        while self.order_book_buy and self.order_book_sell:
-            best_buy = self.order_book_buy[0]
-            best_sell = self.order_book_sell[0]
-
-            if best_buy.price >= best_sell.price:
-                trade_price = (best_buy.price + best_sell.price) / 2
-                trade_quantity = min(best_buy.quantity, best_sell.quantity)
-
-                trade = Trade(
-                    trade_id=trade_id,
-                    buyer_id=best_buy.agent_id,
-                    seller_id=best_sell.agent_id,
-                    price=trade_price,
-                    bid_price=best_buy.price,
-                    ask_price=best_sell.price,
-                    quantity=trade_quantity,
-                    coin=self.coin
-                )
-                trades.append(trade)
-                trade_id += 1
-
-                # Update order quantities
-                best_buy.quantity -= trade_quantity
-                best_sell.quantity -= trade_quantity
-
-                if best_buy.quantity == 0:
-                    self.order_book_buy.pop(0)
-                if best_sell.quantity == 0:
-                    self.order_book_sell.pop(0)
-            else:
-                break
+            try:
+                if market_action.order_type == OrderType.BUY:
+                    trade = self._execute_buy(agent, market_action)
+                elif market_action.order_type == OrderType.SELL:
+                    trade = self._execute_sell(agent, market_action)
+                else:
+                    logger.warning(f"Invalid order type from agent {agent_id}: {market_action.order_type}")
+                    continue
+                if trade:
+                    trades.append(trade)
+            except Exception as e:
+                logger.error(f"Error processing action for agent {agent_id}: {str(e)}")
 
         return trades
 
-    def _get_order_book_summary(self) -> Dict[str, List[Tuple[float, int]]]:
-        buy_orders = {}
-        for order in self.order_book_buy:
-            price = order.price
-            quantity = order.quantity
-            buy_orders[price] = buy_orders.get(price, 0) + quantity
-        sell_orders = {}
-        for order in self.order_book_sell:
-            price = order.price
-            quantity = order.quantity
-            sell_orders[price] = sell_orders.get(price, 0) + quantity
-        return {
-            'buy': sorted(buy_orders.items(), key=lambda x: -x[0]),
-            'sell': sorted(sell_orders.items(), key=lambda x: x[0])
-        }
+    def _execute_buy(self, agent: CryptoEconomicAgent, market_action: MarketAction) -> Optional[Trade]:
+        """Agent buys tokens using ETH."""
+        source_token_address = self.ethereum_interface.testnet_data['eth_address']  # ETH address placeholder
+        target_token_address = self.token_addresses[0]  # Assuming the first token is the one being traded
+
+        # Agent must approve the orderbook to spend their ETH (handled internally)
+        # Since ETH doesn't require approval, we can proceed directly
+
+        # Execute swap on the orderbook contract
+        tx_hash = self.ethereum_interface.swap(
+            source_token_address=source_token_address,
+            source_token_amount=market_action.price * market_action.quantity,
+            target_token_address=target_token_address,
+            private_key=agent.private_key
+        )
+        logger.info(f"Agent {agent.id} executed buy. TxHash: {tx_hash}")
+
+        # Record the trade
+        trade = Trade(
+            trade_id=len(self.trades),
+            buyer_id=agent.id,
+            seller_id="Orderbook",
+            price=market_action.price,
+            bid_price=market_action.price,
+            ask_price=market_action.price,
+            quantity=market_action.quantity,
+            coin=self.coin
+        )
+        return trade
+
+    def _execute_sell(self, agent: CryptoEconomicAgent, market_action: MarketAction) -> Optional[Trade]:
+        """Agent sells tokens for ETH."""
+        source_token_address = self.token_addresses[0]  # Assuming the first token is the one being traded
+        target_token_address = self.ethereum_interface.testnet_data['eth_address']  # ETH address placeholder
+
+        # Agent must approve the orderbook to spend their tokens
+        allowance = self.ethereum_interface.get_erc20_allowance(
+            owner=agent.ethereum_address,
+            spender=self.orderbook_address,
+            contract_address=source_token_address
+        )
+        if allowance < market_action.quantity:
+            # Approve the required amount
+            tx_hash = self.ethereum_interface.approve_erc20(
+                spender=self.orderbook_address,
+                amount=market_action.quantity,
+                contract_address=source_token_address,
+                private_key=agent.private_key
+            )
+            logger.info(f"Agent {agent.id} approved {market_action.quantity} tokens. TxHash: {tx_hash}")
+
+        # Execute swap on the orderbook contract
+        tx_hash = self.ethereum_interface.swap(
+            source_token_address=source_token_address,
+            source_token_amount=market_action.quantity,
+            target_token_address=target_token_address,
+            private_key=agent.private_key
+        )
+        logger.info(f"Agent {agent.id} executed sell. TxHash: {tx_hash}")
+
+        # Record the trade
+        trade = Trade(
+            trade_id=len(self.trades),
+            buyer_id="Orderbook",
+            seller_id=agent.id,
+            price=market_action.price,
+            bid_price=market_action.price,
+            ask_price=market_action.price,
+            quantity=market_action.quantity,
+            coin=self.coin
+        )
+        return trade
 
     def _update_price(self, trades: List[Trade]):
         if trades:
             prices = [trade.price for trade in trades]
             self.current_price = sum(prices) / len(prices)
-            self.price_history.append(self.current_price)
+        # Optionally, fetch current price from the orderbook contract
+        # self.current_price = self.ethereum_interface.get_current_price(...)
+        self.price_history.append(self.current_price)
 
-    def _create_observations(self, new_trades: List[Trade], market_summary: MarketSummary, order_book_summary: Dict[str, List[Tuple[float, int]]]) -> Dict[str, CryptoMarketLocalObservation]:
+    def _create_observations(self, market_summary: MarketSummary) -> Dict[str, CryptoMarketLocalObservation]:
         observations = {}
-        agent_ids = set([trade.buyer_id for trade in new_trades] + [trade.seller_id for trade in new_trades])
+        for agent_id, agent in self.agent_registry.items():
+            # Fetch agent balances
+            eth_balance = self.ethereum_interface.get_eth_balance(agent.ethereum_address)
+            token_balance = self.ethereum_interface.get_erc20_balance(
+                agent.ethereum_address,
+                self.token_addresses[0]
+            )
 
-        for agent_id in agent_ids:
-            agent_trades = [trade for trade in new_trades if trade.buyer_id == agent_id or trade.seller_id == agent_id]
-            agent = self.agent_registry.get(agent_id)
-            if agent:
-                portfolio_value = agent.calculate_portfolio_value(self.current_price)
-            else:
-                portfolio_value = 0.0
+            # Calculate portfolio value
+            portfolio_value = eth_balance + token_balance * self.current_price  # Simplified
 
             observation = CryptoMarketObservation(
-                trades=agent_trades,
+                trades=[],  # Trades involving the agent can be added here
                 market_summary=market_summary,
-                order_book_summary=order_book_summary,
                 current_price=self.current_price,
-                portfolio_value=portfolio_value
+                portfolio_value=portfolio_value,
+                eth_balance=eth_balance,
+                token_balance=token_balance,
+                price_history=self.price_history.copy()
             )
 
             observations[agent_id] = CryptoMarketLocalObservation(
@@ -223,7 +277,7 @@ class CryptoMarketMechanism(Mechanism):
 
     def _create_market_summary(self, trades: List[Trade]) -> MarketSummary:
         if not trades:
-            return MarketSummary()
+            return MarketSummary(trades_count=0, average_price=self.current_price, total_volume=0, price_range=(self.current_price, self.current_price))
 
         prices = [trade.price for trade in trades]
         total_volume = sum(trade.quantity for trade in trades)
@@ -240,14 +294,11 @@ class CryptoMarketMechanism(Mechanism):
             "current_price": self.current_price,
             "price_history": self.price_history,
             "trades": [trade.model_dump() for trade in self.trades],
-            "order_book_summary": self._get_order_book_summary()
         }
 
     def reset(self) -> None:
         self.current_round = 0
         self.trades = []
-        self.order_book_buy = []
-        self.order_book_sell = []
         self.current_price = 0.1
         self.price_history = [self.current_price]
 
@@ -259,41 +310,42 @@ class CryptoMarket(MultiAgentEnvironment):
     mechanism: CryptoMarketMechanism = Field(default_factory=CryptoMarketMechanism, description="Mechanism of the crypto market")
     agents: Dict[str, CryptoEconomicAgent] = Field(default_factory=dict, description="Dictionary of agents in the market")
 
-    def __init__(self, **data):
-        super().__init__(**data)
-        self.mechanism.agent_registry = self.agents
-
     def __init__(self, agents: Dict[str, CryptoEconomicAgent], **kwargs):
         super().__init__(**kwargs)
         self.agents = agents
-        self.mechanism.agent_registry = self.agents
+        self.mechanism.agent_registry = {}
+        
+        # Fix: Properly register agents with string IDs
+        for agent_id, agent in agents.items():
+            str_id = str(agent_id)
+            if hasattr(agent, 'economic_agent'):
+                # If agent is wrapped, register the economic agent
+                self.mechanism.agent_registry[str_id] = agent.economic_agent
+            else:
+                # If agent is direct CryptoEconomicAgent instance
+                self.mechanism.agent_registry[str_id] = agent
+            
+            # Ensure agent has its ID set
+            if hasattr(agent, 'economic_agent'):
+                agent.economic_agent.id = str_id
+            else:
+                agent.id = str_id
+
+        # Setup mechanism after registry is populated
+        self.mechanism.setup()
 
     def reset(self) -> GlobalObservation:
         self.current_step = 0
         self.history = EnvironmentHistory()
         self.mechanism.reset()
-        observations = {}
-
-        for agent_id, agent in self.agents.items():
-            portfolio_value = agent.calculate_portfolio_value(self.mechanism.current_price)
-            observation = CryptoMarketObservation(
-                trades=[],
-                market_summary=MarketSummary(),
-                order_book_summary=self.mechanism._get_order_book_summary(),
-                current_price=self.mechanism.current_price,
-                portfolio_value=portfolio_value
-            )
-            observations[agent_id] = CryptoMarketLocalObservation(
-                agent_id=agent_id,
-                observation=observation
-            )
+        observations = self.mechanism._create_observations(MarketSummary())
 
         return CryptoMarketGlobalObservation(
             observations=observations,
             all_trades=[],
             market_summary=MarketSummary(),
-            order_book_summary=self.mechanism._get_order_book_summary(),
-            current_price=self.mechanism.current_price
+            current_price=self.mechanism.current_price,
+            price_history=self.mechanism.price_history.copy()
         )
 
     def step(self, actions: GlobalAction) -> EnvironmentStep:
