@@ -10,26 +10,17 @@ from typing import List, Dict, Union
 import warnings
 
 import yaml
-from auction_orchestrator import AuctionOrchestrator
-from groupchat_orchestrator import GroupChatOrchestrator
+from market_agents.memecoin_orchestrators.crypto_orchestrator import CryptoOrchestrator
 from market_agents.agents.market_agent import MarketAgent
 from market_agents.agents.personas.persona import Persona, generate_persona, save_persona_to_file
 from market_agents.agents.protocols.acl_message import ACLMessage
-from market_agents.economics.econ_agent import EconomicAgent
-from market_agents.economics.econ_models import (
-    Ask,
-    Basket,
-    Bid,
-    BuyerPreferenceSchedule,
-    Endowment,
-    Good,
-    SellerPreferenceSchedule,
-)
+from market_agents.memecoin_orchestrators.crypto_agent import CryptoEconomicAgent
+from market_agents.memecoin_orchestrators.crypto_models import Crypto, Endowment as CryptoEndowment, Portfolio, Position
 from market_agents.inference.parallel_inference import ParallelAIUtilities, RequestLimits
-from market_agents.orchestrators.base_orchestrator import BaseEnvironmentOrchestrator
-from market_agents.orchestrators.config import OrchestratorConfig, load_config
-from market_agents.orchestrators.insert_simulation_data import SimulationDataInserter
-from market_agents.orchestrators.logger_utils import (
+from market_agents.memecoin_orchestrators.base_orchestrator import BaseEnvironmentOrchestrator
+from market_agents.memecoin_orchestrators.config import OrchestratorConfig, load_config
+from market_agents.memecoin_orchestrators.insert_simulation_data import SimulationDataInserter
+from market_agents.memecoin_orchestrators.logger_utils import (
     log_section,
     log_environment_setup,
     log_agent_init,
@@ -95,72 +86,52 @@ class MetaOrchestrator:
         log_section(self.logger, "Generating Agents")
         personas = self.load_or_generate_personas()
         num_agents = len(personas)
-        num_buyers = num_agents // 2
-        num_sellers = num_agents - num_buyers
 
+        # Initialize EthereumInterface here for all agents
+        from agent_evm_interface.agent_evm_interface import EthereumInterface
+        ethereum_interface = EthereumInterface()
+        
         for i, persona in enumerate(personas):
             agent_uuid = str(uuid.uuid4())
-            # Randomly assign an LLM config if there are multiple configs
             llm_config = random.choice(self.config.llm_configs).dict() if len(self.config.llm_configs) > 1 else self.config.llm_configs[0].dict()
-            # Assign roles explicitly based on index
-            if i < num_buyers:
-                is_buyer = True
-                persona.role = "buyer"
-            else:
-                is_buyer = False
-                persona.role = "seller"
 
+            persona.role = "trader"
             agent_config = self.config.agent_config.dict()
-            if is_buyer:
-                initial_cash = agent_config.get('buyer_initial_cash', 1000)
-                initial_goods_quantity = agent_config.get('buyer_initial_goods', 0)
-                base_value = agent_config.get('buyer_base_value', 120.0)
-            else:
-                initial_cash = agent_config.get('seller_initial_cash', 0)
-                initial_goods_quantity = agent_config.get('seller_initial_goods', 10)
-                base_value = agent_config.get('seller_base_value', 80.0)
 
-            good_name = agent_config.get('good_name', 'apple')
-            initial_goods = {good_name: initial_goods_quantity}
+            # Get Ethereum account for this agent
+            account = ethereum_interface.accounts.pop()
 
-            # Create initial basket and endowment
-            initial_basket = Basket(
-                cash=initial_cash,
-                goods=[Good(name=good_name, quantity=initial_goods_quantity)]
+            # Create initial portfolio
+            initial_portfolio = Portfolio(
+                cash=agent_config.get('initial_cash', 1000),
+                coins=[
+                    Crypto(
+                        symbol=agent_config.get('coin_name', 'TOKEN'),
+                        positions=[Position(
+                            quantity=agent_config.get('initial_coin', 100),
+                            purchase_price=1.0
+                        )]
+                    )
+                ]
             )
-            endowment = Endowment(
-                initial_basket=initial_basket,
+
+            # Create the endowment with portfolio
+            endowment = CryptoEndowment(
+                initial_portfolio=initial_portfolio,
                 agent_id=agent_uuid
             )
 
-            # Create preference schedules
-            if is_buyer:
-                value_schedules = {
-                    good_name: BuyerPreferenceSchedule(
-                        num_units=agent_config.get('num_units', 10),
-                        base_value=base_value,
-                        noise_factor=agent_config.get('noise_factor', 0.05)
-                    )
-                }
-                cost_schedules = {}
-            else:
-                value_schedules = {}
-                cost_schedules = {
-                    good_name: SellerPreferenceSchedule(
-                        num_units=agent_config.get('num_units', 10),
-                        base_value=base_value,
-                        noise_factor=agent_config.get('noise_factor', 0.05)
-                    )
-                }
-
-            economic_agent = EconomicAgent(
+            # Create the CryptoEconomicAgent with Ethereum details
+            economic_agent = CryptoEconomicAgent(
                 id=agent_uuid,
                 endowment=endowment,
-                value_schedules=value_schedules,
-                cost_schedules=cost_schedules,
-                max_relative_spread=agent_config.get('max_relative_spread', 0.2)
+                max_relative_spread=agent_config.get('max_relative_spread', 0.2),
+                coin=agent_config.get('coin_name', 'TOKEN'),
+                ethereum_address=account['address'],  # Add Ethereum address here
+                private_key=account['private_key']    # Add private key here
             )
 
+            # Create MarketAgent with the same Ethereum details
             agent = MarketAgent.create(
                 agent_id=agent_uuid,
                 use_llm=agent_config.get('use_llm', True),
@@ -171,13 +142,12 @@ class MetaOrchestrator:
                 econ_agent=economic_agent
             )
 
-            # Initialize last_perception and last_observation
             agent.last_perception = None
             agent.last_observation = None
             agent.last_step = None
             agent.index = i
             self.agents.append(agent)
-            log_agent_init(self.logger, agent.index, is_buyer, persona)
+            log_agent_init(self.logger, agent.index, False, persona)
 
     def _initialize_environment_orchestrators(self) -> Dict[str, BaseEnvironmentOrchestrator]:
         orchestrators = {}
@@ -193,17 +163,8 @@ class MetaOrchestrator:
                 self.logger.warning(f"Configuration for environment '{env_name}' not found.")
                 continue
                 
-            if env_name == 'auction':
-                orchestrator = AuctionOrchestrator(
-                    config=env_config,
-                    orchestrator_config=self.config,
-                    agents=self.agents,
-                    ai_utils=self.ai_utils,
-                    data_inserter=self.data_inserter,
-                    logger=self.logger
-                )
-            elif env_name == 'group_chat':
-                orchestrator = GroupChatOrchestrator(
+            if env_name == 'crypto_market':
+                orchestrator = CryptoOrchestrator(
                     config=env_config,
                     orchestrator_config=self.config,
                     agents=self.agents,
@@ -215,15 +176,8 @@ class MetaOrchestrator:
                 self.logger.warning(f"Unknown environment: {env_name}")
                 continue
             
-            # Initialize environment for this orchestrator
-            #orchestrator.setup_environment()
             orchestrators[env_name] = orchestrator
             self.logger.info(f"Initialized {env_name} environment")
-            
-        # Verify environments are properly set for all agents
-        for agent in self.agents:
-            env_names = agent.environments.keys() if hasattr(agent, 'environments') else []
-            self.logger.info(f"Agent {agent.index} has environments: {list(env_names)}")
             
         return orchestrators
 
@@ -278,11 +232,11 @@ if __name__ == "__main__":
     async def main():
         # Parse command-line arguments
         parser = argparse.ArgumentParser(description='Run the market simulation.')
-        parser.add_argument('--environments', nargs='+', help='List of environments to run (e.g., group_chat auction)')
+        parser.add_argument('--environments', nargs='+', help='List of environments to run (e.g., crypto_market)')
         args = parser.parse_args()
 
         # Load configuration from orchestrator_config.yaml
-        config_path = Path("market_agents/orchestrators/orchestrator_config.yaml")
+        config_path = Path("market_agents/memecoin_orchestrators/orchestrator_config.yaml")
         config = load_config(config_path=config_path)
 
         # If environments are specified in command-line arguments, use them

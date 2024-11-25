@@ -1,0 +1,66 @@
+num_agents: 5
+max_rounds: 2
+agent_config:
+  initial_cash: 10000.0 
+  initial_coin: 1000
+  coin_name: "DOGE" 
+  max_relative_spread: 0.05
+  risk_aversion: 0.5
+  expected_return: 0.05 
+  use_llm: True
+  noise_factor: 0.1   
+llm_configs:
+  - name: "gpt-4o-mini-low-temp"
+    client: "openai"
+    model: "gpt-4o-mini"
+    temperature: 0.2
+    max_tokens: 2048
+    use_cache: true
+  - name: "gpt-4o-mini-med-temp"
+    client: "openai"
+    model: "gpt-4o-mini"
+    temperature: 0.6
+    max_tokens: 4096
+    use_cache: true
+  - name: "gpt-4o-mini-high-temp"
+    client: "openai"
+    model: "gpt-4o-mini"
+    temperature: 1.0
+    max_tokens: 8192
+    use_cache: true
+  - name: "gpt-4o-low-temp"
+    client: "openai"
+    model: "gpt-4o"
+    temperature: 0.2
+    max_tokens: 4096
+    use_cache: true
+  - name: "gpt-4o-med-temp"
+    client: "openai"
+    model: "gpt-4o"
+    temperature: 0.6
+    max_tokens: 8192
+    use_cache: true
+  - name: "gpt-4o-high-temp"
+    client: "openai"
+    model: "gpt-4o"
+    temperature: 1.0
+    max_tokens: 16384
+    use_cache: true
+environment_configs:
+  crypto_market:
+    name: "memecoin"
+    address: "crypto_market_v1"
+    max_rounds: 10
+    coin_name: "DOGE"
+#  group_chat:
+#    name: "Stock Market Discussion"
+#    address: "group_chat"
+#    max_rounds: 5
+#    initial_topic: "Discuss the impact of recent FED rate cut of 50 bps on the stock market"
+
+environment_order:
+  - crypto_market
+protocol: "ACLMessage"
+database_config:
+  db_type: "postgres"
+  db_name: "market_simulation"

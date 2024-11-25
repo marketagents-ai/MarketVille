@@ -42,6 +42,7 @@ from market_agents.orchestrators.logger_utils import (
     print_ascii_art
 )
 from market_agents.orchestrators.insert_simulation_data import SimulationDataInserter
+from market_agents.orchestrators.agent_cognitive import AgentCognitiveProcessor
 
 # Define AuctionTracker for tracking auction-specific data
 class AuctionTracker:
@@ -87,14 +88,20 @@ class AuctionOrchestrator(BaseEnvironmentOrchestrator):
         self.environment = None
         self.tracker = AuctionTracker()
         self.agent_surpluses: Dict[str, float] = {}
+        self.logger = logger or logging.getlogger(__name__)
+        self.cognitive_processor = AgentCognitiveProcessor(ai_utils, data_inserter, self.logger)
+
         
-    def setup_environment(self):
+    async def setup_environment(self):
+        """Sets up the auction environment and assigns it to agents"""
         log_section(self.logger, "CONFIGURING AUCTION ENVIRONMENT")
+        
         # Create the auction mechanism
         double_auction = DoubleAuction(
             max_rounds=self.config.max_rounds,
             good_name=self.orchestrator_config.agent_config.good_name
         )
+        
         # Set up the multi-agent environment
         self.environment = MultiAgentEnvironment(
             name=self.config.name,
@@ -104,12 +111,24 @@ class AuctionOrchestrator(BaseEnvironmentOrchestrator):
             observation_space=AuctionObservationSpace(),
             mechanism=double_auction
         )
-        # Assign the environment to agents without overwriting existing environments
+        
+        # Assign the environment to agents
         for agent in self.agents:
             if not hasattr(agent, 'environments') or agent.environments is None:
                 agent.environments = {}
             agent.environments[self.environment_name] = self.environment
+            
         log_environment_setup(self.logger, self.environment_name)
+        self.logger.info("Auction environment setup complete.")
+        
+        # Verify environments are properly set
+        for agent in self.agents:
+            if self.environment_name not in agent.environments:
+                self.logger.error(f"Agent {agent.index} missing auction environment!")
+            else:
+                self.logger.info(f"Agent {agent.index} environments: {list(agent.environments.keys())}")
+
+        return self.environment
 
     async def run_environment(self, round_num: int):
         log_running(self.logger, self.environment_name)
@@ -123,10 +142,11 @@ class AuctionOrchestrator(BaseEnvironmentOrchestrator):
         self.set_agent_system_messages(round_num, env.mechanism.good_name)
 
         log_section(self.logger, "AGENT PERCEPTIONS")
-        # Run agents' perception in parallel
-        perception_prompts = await self.run_parallel_perceive()
-        perceptions = await self.ai_utils.run_parallel_ai_completion(perception_prompts, update_history=False)
-        self.data_inserter.insert_ai_requests(self.ai_utils.get_all_requests())
+        # Run agents' perception in parallel using imported cognitive method
+        perceptions = await self.cognitive_processor.run_parallel_perceive(
+            self.agents, 
+            self.environment_name
+        )
 
         # Map perceptions to agents
         perceptions_map = {perception.source_id: perception for perception in perceptions}
@@ -145,10 +165,11 @@ class AuctionOrchestrator(BaseEnvironmentOrchestrator):
         perception_contents = [agent.last_perception or "" for agent in self.agents]
 
         log_section(self.logger, "AGENT ACTIONS")
-        # Run agents' action generation in parallel
-        action_prompts = await self.run_parallel_generate_action(perception_contents)
-        actions = await self.ai_utils.run_parallel_ai_completion(action_prompts, update_history=False)
-        self.data_inserter.insert_ai_requests(self.ai_utils.get_all_requests())
+        # Run agents' action generation in parallel using imported cognitive method
+        actions = await self.cognitive_processor.run_parallel_action(
+            self.agents,
+            self.environment_name
+        )
 
         actions_map = {action.source_id: action for action in actions}
 
@@ -203,75 +224,10 @@ class AuctionOrchestrator(BaseEnvironmentOrchestrator):
 
         # Run reflection step
         log_section(self.logger, "AGENT REFLECTIONS")
-        await self.run_reflection()
-
-    async def run_parallel_perceive(self) -> List[Any]:
-        perceive_prompts = []
-        for agent in self.agents:
-            perceive_prompt = await agent.perceive(self.environment_name, return_prompt=True)
-            perceive_prompts.append(perceive_prompt)
-        return perceive_prompts
-
-    async def run_parallel_generate_action(self, perceptions: List[str]) -> List[Any]:
-        action_prompts = []
-        for agent, perception in zip(self.agents, perceptions):
-            action_prompt = await agent.generate_action(self.environment_name, perception, return_prompt=True)
-            action_prompts.append(action_prompt)
-        return action_prompts
-
-    async def run_parallel_reflect(self) -> List[Any]:
-        reflect_prompts = []
-        agents_with_observations = []
-        for agent in self.agents:
-            if agent.last_observation:
-                reflect_prompt = await agent.reflect(self.environment_name, return_prompt=True)
-                reflect_prompts.append(reflect_prompt)
-                agents_with_observations.append(agent)
-            else:
-                self.logger.info(f"Skipping reflection for agent {agent.index} due to no observation")
-        return reflect_prompts, agents_with_observations
-
-    async def run_reflection(self):
-        # Run agents' reflection in parallel
-        reflect_prompts, agents_with_observations = await self.run_parallel_reflect()
-        if reflect_prompts:
-            reflections = await self.ai_utils.run_parallel_ai_completion(reflect_prompts, update_history=False)
-            self.data_inserter.insert_ai_requests(self.ai_utils.get_all_requests())
-
-            for agent, reflection in zip(agents_with_observations, reflections):
-                if reflection.json_object:
-                    log_reflection(self.logger, agent.index, reflection.json_object.object)                    
-                    # Access the surplus from agent's last_step.info
-                    environment_reward = agent.last_step.info.get('agent_rewards', {}).get(agent.id, 0.0) if agent.last_step else 0.0
-                    self_reward = reflection.json_object.object.get("self_reward", 0.0)
-                    
-                    # Normalize environment_reward
-                    normalized_environment_reward = environment_reward / (1 + abs(environment_reward))
-                    normalized_environment_reward = max(0.0, min(normalized_environment_reward, 1.0))
-                    
-                    # Weighted average of normalized environment_reward and self_reward
-                    total_reward = normalized_environment_reward * 0.5 + self_reward * 0.5
-                    
-                    # Add logging for rewards
-                    self.logger.info(
-                        f"Agent {agent.index} rewards - Environment Reward: {environment_reward}, "
-                        f"Normalized Environment Reward: {normalized_environment_reward}, "
-                        f"Self Reward: {self_reward}, Total Reward: {total_reward}"
-                    )
-                    agent.memory.append({
-                        "type": "reflection",
-                        "content": reflection.json_object.object.get("reflection", ""),
-                        "strategy_update": reflection.json_object.object.get("strategy_update", ""),
-                        "observation": agent.last_observation,
-                        "environment_reward": round(environment_reward, 4),
-                        "self_reward": round(self_reward, 4),
-                        "total_reward": round(total_reward, 4),
-                        "timestamp": datetime.now().isoformat()
-                    })
-                else:
-                    self.logger.warning(f"No reflection JSON object for agent {agent.index}")
-        else:
-            self.logger.info("No reflections generated this round.")
+        await self.cognitive_processor.run_parallel_reflect(
+            self.agents,
+            self.environment_name
+        )
 
     def set_agent_system_messages(self, round_num: int, good_name: str):
         # Set system messages for agents based on their role and round number

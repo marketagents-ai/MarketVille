@@ -7,23 +7,20 @@ import yaml
 from pathlib import Path
 
 class AgentConfig(BaseModel):
-    num_units: int
-    buyer_base_value: float
-    seller_base_value: float
     use_llm: bool
-    buyer_initial_cash: float
-    buyer_initial_goods: int
-    seller_initial_cash: float
-    seller_initial_goods: int
-    good_name: str
+    initial_cash: float 
+    initial_coin: int  
+    coin_name: str
     noise_factor: float
     max_relative_spread: float
 
-class AuctionConfig(BaseModel):
+class CryptoConfig(BaseModel):
     name: str
     address: str
     max_rounds: int
-    good_name: str
+    coin_name: str
+    orderbook_address: str = Field(default="")
+    token_addresses: List[str] = Field(default_factory=list)
 
 class GroupChatConfig(BaseModel):
     name: str
@@ -57,7 +54,7 @@ class OrchestratorConfig(BaseSettings):
     max_rounds: int
     agent_config: AgentConfig
     llm_configs: List[LLMConfigModel]
-    environment_configs: Dict[str, Union[AuctionConfig, GroupChatConfig]]
+    environment_configs: Dict[str, Union[CryptoConfig, GroupChatConfig]]
     environment_order: List[str]
     protocol: str
     database_config: DatabaseConfig = DatabaseConfig()
