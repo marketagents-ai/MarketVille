@@ -1,0 +1,40 @@
+{
+    "tokens": [
+        {
+            "symbol": "USDC",
+            "name": "USD Coin", 
+            "initial_price_usd": 1.0,
+            "initial_supply": 1000000000
+        },
+        {
+            "symbol": "DOGE",
+            "name": "Dogecoin",
+            "initial_price_usd": 0.400,
+            "initial_supply": 1000000000
+        },
+        {
+            "symbol": "SHIB", 
+            "name": "Shiba Inu",
+            "initial_price_usd": 0.0000255,
+            "initial_supply": 1000000000
+        },
+        {
+            "symbol": "PEPE",
+            "name": "Pepe",
+            "initial_price_usd": 0.0000191,
+            "initial_supply": 1000000000
+        },
+        {
+            "symbol": "FLOKI",
+            "name": "Floki",
+            "initial_price_usd": 0.000227,
+            "initial_supply": 1000000000
+        },
+        {
+            "symbol": "GOAT",
+            "name": "Goatseus Maximus",
+            "initial_price_usd": 0.726,
+            "initial_supply": 1000000000
+        }
+    ]
+}
