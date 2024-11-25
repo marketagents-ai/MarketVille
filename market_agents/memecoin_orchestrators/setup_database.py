@@ -52,6 +52,7 @@ def create_tables(db_params):
         current_round INTEGER DEFAULT 1,
         max_iter INTEGER NOT NULL,
         llm_config JSONB,
+        config JSONB,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     )
     """)
@@ -79,7 +80,7 @@ def create_tables(db_params):
     """)
 
     cursor.execute("""
-    CREATE TABLE agent_positions (
+    CREATE TABLE IF NOT EXISTS agent_positions (
         agent_id UUID NOT NULL,
         round INTEGER NOT NULL,
         cash FLOAT NOT NULL,

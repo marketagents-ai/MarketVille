@@ -127,8 +127,8 @@ class MetaOrchestrator:
                 endowment=endowment,
                 max_relative_spread=agent_config.get('max_relative_spread', 0.2),
                 coin=agent_config.get('coin_name', 'TOKEN'),
-                ethereum_address=account['address'],  # Add Ethereum address here
-                private_key=account['private_key']    # Add private key here
+                ethereum_address=account['address'],
+                private_key=account['private_key']
             )
 
             # Create MarketAgent with the same Ethereum details
