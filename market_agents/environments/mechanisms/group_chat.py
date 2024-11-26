@@ -12,12 +12,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 class GroupChatMessage(BaseModel):
-    content: str
-    message_type: Literal["propose_topic", "group_message"]
-    agent_id: str
-    cohort_id: str
-    sub_round: int
-
+    content: str = Field(description="agent's opinions & arguments on the topic")
+    
 class GroupChatAction(LocalAction):
     action: GroupChatMessage
 
@@ -26,17 +22,13 @@ class GroupChatAction(LocalAction):
         return cls(
             agent_id=agent_id, 
             action=GroupChatMessage(
-                content="Sample message", 
-                message_type="group_message",
-                agent_id=agent_id,
-                cohort_id="sample_cohort",
-                sub_round=1
+                content="Sample message"
             )
         )
-
+    
     @classmethod
     def action_schema(cls) -> Dict[str, Any]:
-        return cls.model_json_schema()
+        return GroupChatMessage.model_json_schema()
 
 class GroupChatGlobalAction(GlobalAction):
     actions: Dict[str, Dict[str, Any]]
