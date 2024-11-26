@@ -1,7 +1,9 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import create_model
+import socket
+import requests
+from contextlib import closing
 from typing import Optional, List, Any, Dict
 import os
 import psycopg2
@@ -31,6 +33,15 @@ DB_PARAMS = {
     "host": os.getenv("DB_HOST"),
     "port": os.getenv("DB_PORT")
 }
+
+
+def is_port_in_use(port: int) -> bool:
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+        try:
+            sock.bind(("localhost", port))
+            return False
+        except socket.error:
+            return True
 
 def get_db_connection():
     try:
@@ -99,6 +110,11 @@ def process_json_data(value, flatten=False):
             return json.dumps(json_data, indent=2)  # Use indent=2 for pretty formatting
     except json.JSONDecodeError:
         return value
+    
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy"}
 
 @app.get("/api/get-tables")
 async def get_tables():
@@ -376,4 +392,20 @@ async def read_root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="localhost", port=8000)
+    
+    PORT = 8000
+    
+    # Check if server is already running
+    if is_port_in_use(PORT):
+        try:
+            # Try to hit the health endpoint
+            response = requests.get(f"http://localhost:{PORT}/health")
+            if response.status_code == 200:
+                print(f"Server is already running on port {PORT}")
+                exit(0)
+        except requests.RequestException:
+            print(f"Port {PORT} is in use but server is not responding")
+            exit(1)
+    
+    # Start server if not already running
+    uvicorn.run(app, host="localhost", port=PORT)
