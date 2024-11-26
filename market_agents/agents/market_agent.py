@@ -68,7 +68,7 @@ class MarketAgent(LLMAgent):
         
         prompt = self.prompt_manager.get_perception_prompt(variables.model_dump())
         
-        return await self.execute(prompt, output_format=PerceptionSchema.model_json_schema(), return_prompt=return_prompt)
+        return await self.execute(prompt, output_format=PerceptionSchema.model_json_schema(), json_tool=True, return_prompt=return_prompt)
 
     async def generate_action(
             self,
@@ -101,7 +101,7 @@ class MarketAgent(LLMAgent):
      
         action_schema = action_space.get_action_schema()
         
-        response = await self.execute(prompt, output_format=action_schema, return_prompt=return_prompt)
+        response = await self.execute(prompt, output_format=action_schema, json_tool=True, return_prompt=return_prompt)
         
         if not return_prompt:
             action = {
@@ -172,6 +172,7 @@ class MarketAgent(LLMAgent):
         response = await self.execute(
             prompt,
             output_format=ReflectionSchema.model_json_schema(),
+            json_tool=True,
             return_prompt=return_prompt
         )
 
