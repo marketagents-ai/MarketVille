@@ -17,16 +17,11 @@ from market_agents.environments.mechanisms.auction import (
     DoubleAuction,
     GlobalAuctionAction
 )
-from market_agents.economics.econ_agent import EconomicAgent
 from market_agents.economics.econ_models import (
     Ask,
     Bid,
-    BuyerPreferenceSchedule,
-    SellerPreferenceSchedule,
     Trade
 )
-from market_agents.inference.message_models import LLMOutput
-from market_agents.agents.protocols.acl_message import ACLMessage
 from market_agents.orchestrators.config import AuctionConfig, OrchestratorConfig
 from market_agents.orchestrators.logger_utils import (
     log_section,
@@ -35,11 +30,7 @@ from market_agents.orchestrators.logger_utils import (
     log_running,
     log_perception,
     log_action,
-    log_reflection,
-    log_round,
-    log_completion,
-    log_trade,
-    print_ascii_art
+    log_round
 )
 from market_agents.orchestrators.insert_simulation_data import SimulationDataInserter
 from market_agents.orchestrators.agent_cognitive import AgentCognitiveProcessor
@@ -308,22 +299,22 @@ class AuctionOrchestrator(BaseEnvironmentOrchestrator):
                 buyer.economic_agent.process_trade(trade)
                 seller.economic_agent.process_trade(trade)
                 
-                # Calculate surpluses
-                buyer_surplus = buyer.economic_agent.calculate_individual_surplus()
-                seller_surplus = seller.economic_agent.calculate_individual_surplus()
+                # Round the surpluses
+                buyer_surplus = round(buyer.economic_agent.calculate_individual_surplus(), 2)
+                seller_surplus = round(seller.economic_agent.calculate_individual_surplus(), 2)
                 
-                self.logger.info(f"Buyer surplus: {buyer_surplus}, Seller surplus: {seller_surplus}")
+                self.logger.info(f"Buyer surplus: {buyer_surplus:.2f}, Seller surplus: {seller_surplus:.2f}")
                 
-                agent_surpluses[buyer.id] = agent_surpluses.get(buyer.id, 0) + buyer_surplus
-                agent_surpluses[seller.id] = agent_surpluses.get(seller.id, 0) + seller_surplus
+                agent_surpluses[buyer.id] = round(agent_surpluses.get(buyer.id, 0) + buyer_surplus, 2)
+                agent_surpluses[seller.id] = round(agent_surpluses.get(seller.id, 0) + seller_surplus, 2)
                 
-                trade_surplus = buyer_surplus + seller_surplus
+                trade_surplus = round(buyer_surplus + seller_surplus, 2)
                 
                 self.tracker.add_trade(trade)
                 round_surplus += trade_surplus
                 round_quantity += trade.quantity
                 self.logger.info(f"Executed trade: {trade}")
-                self.logger.info(f"Trade surplus: {trade_surplus}")
+                self.logger.info(f"Trade surplus: {trade_surplus:.2f}")
                 
             except Exception as e:
                 self.logger.error(f"Error processing trade: {str(e)}")
