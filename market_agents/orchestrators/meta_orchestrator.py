@@ -223,7 +223,7 @@ class MetaOrchestrator:
         # Verify environments are properly set for all agents
         for agent in self.agents:
             env_names = agent.environments.keys() if hasattr(agent, 'environments') else []
-            self.logger.info(f"Agent {agent.index} has environments: {list(env_names)}")
+            #self.logger.info(f"Agent {agent.index} has environments: {list(env_names)}")
             
         return orchestrators
 
