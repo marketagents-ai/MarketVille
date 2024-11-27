@@ -42,8 +42,19 @@ class AuctionTracker:
         self.per_round_surplus: List[float] = []
         self.per_round_quantities: List[int] = []
 
-    def add_trade(self, trade: Trade):
-        self.all_trades.append(trade)
+    def add_trade(self, trade: Trade, buyer_surplus: float, seller_surplus: float, round_num: int):
+        trade_data = {
+            'buyer_id': str(trade.buyer_id),
+            'seller_id': str(trade.seller_id),
+            'quantity': trade.quantity,
+            'price': trade.price,
+            'buyer_surplus': round(buyer_surplus, 2),
+            'seller_surplus': round(seller_surplus, 2),
+            'total_surplus': round(buyer_surplus + seller_surplus, 2),
+            'round': round_num
+        }
+        self.all_trades.append(trade_data)
+        logging.debug("Added trade to tracker: {trade_data}")
 
     def add_round_data(self, surplus: float, quantity: int):
         self.per_round_surplus.append(surplus)
@@ -55,6 +66,21 @@ class AuctionTracker:
             "total_surplus": sum(self.per_round_surplus),
             "total_quantity": sum(self.per_round_quantities)
         }
+
+    def get_trades_data(self) -> List[Dict]:
+        return [
+            {
+                'buyer_id': trade['buyer_id'],
+                'seller_id': trade['seller_id'],
+                'quantity': trade['quantity'],
+                'price': trade['price'],
+                'buyer_surplus': trade['buyer_surplus'],
+                'seller_surplus': trade['seller_surplus'],
+                'total_surplus': trade['total_surplus'],
+                'round': trade['round']
+            }
+            for trade in self.all_trades
+        ]
 
 # Implement the AuctionOrchestrator class
 class AuctionOrchestrator(BaseEnvironmentOrchestrator):
@@ -290,6 +316,8 @@ class AuctionOrchestrator(BaseEnvironmentOrchestrator):
         self.logger.info(f"Processing {len(global_observation.all_trades)} trades")
         
         log_section(self.logger, "TRADES")
+        
+        # Process each trade from the global observation
         for trade in global_observation.all_trades:
             try:
                 buyer = next(agent for agent in self.agents if agent.id == trade.buyer_id)
@@ -299,20 +327,23 @@ class AuctionOrchestrator(BaseEnvironmentOrchestrator):
                 buyer.economic_agent.process_trade(trade)
                 seller.economic_agent.process_trade(trade)
                 
-                # Round the surpluses
+                # Calculate surpluses
                 buyer_surplus = round(buyer.economic_agent.calculate_individual_surplus(), 2)
                 seller_surplus = round(seller.economic_agent.calculate_individual_surplus(), 2)
                 
                 self.logger.info(f"Buyer surplus: {buyer_surplus:.2f}, Seller surplus: {seller_surplus:.2f}")
                 
+                # Update agent surpluses
                 agent_surpluses[buyer.id] = round(agent_surpluses.get(buyer.id, 0) + buyer_surplus, 2)
                 agent_surpluses[seller.id] = round(agent_surpluses.get(seller.id, 0) + seller_surplus, 2)
                 
-                trade_surplus = round(buyer_surplus + seller_surplus, 2)
+                # Add trade to tracker with current round number from mechanism
+                self.tracker.add_trade(trade, buyer_surplus, seller_surplus, global_observation.market_summary.trades_count)
                 
-                self.tracker.add_trade(trade)
+                trade_surplus = round(buyer_surplus + seller_surplus, 2)
                 round_surplus += trade_surplus
                 round_quantity += trade.quantity
+                
                 self.logger.info(f"Executed trade: {trade}")
                 self.logger.info(f"Trade surplus: {trade_surplus:.2f}")
                 
@@ -329,8 +360,6 @@ class AuctionOrchestrator(BaseEnvironmentOrchestrator):
                 agent = next(agent for agent in self.agents if agent.id == agent_id)
                 agent.last_observation = agent_observation
                 agent.last_step = env_state
-                
-                observation = agent_observation.observation
             except Exception as e:
                 self.logger.error(f"Error updating agent {agent_id} state: {str(e)}")
                 self.logger.exception("Exception details:")
@@ -360,8 +389,23 @@ class AuctionOrchestrator(BaseEnvironmentOrchestrator):
         return summary
 
     async def process_round_results(self, round_num: int):
-        # Save round data to the database
         try:
+            agents_data = [
+                {
+                    'id': str(agent.id),
+                    'role': agent.role,
+                    'is_llm': agent.use_llm,
+                    'max_iter': self.orchestrator_config.max_rounds,
+                    'llm_config': agent.llm_config if isinstance(agent.llm_config, dict) else agent.llm_config.dict()
+                }
+                for agent in self.agents
+            ]
+            agent_id_map = self.data_inserter.insert_agents(agents_data)
+            
+            trades_data = self.tracker.get_trades_data()
+            if trades_data:
+                self.data_inserter.insert_trades(trades_data, agent_id_map)
+            
             self.data_inserter.insert_round_data(
                 round_num,
                 self.agents,
@@ -369,9 +413,11 @@ class AuctionOrchestrator(BaseEnvironmentOrchestrator):
                 self.orchestrator_config,
                 {self.environment_name: self.tracker}
             )
+            
             self.logger.info(f"Data for round {round_num} inserted successfully.")
         except Exception as e:
             self.logger.error(f"Error inserting data for round {round_num}: {str(e)}")
+            self.logger.exception("Exception details:")
 
     async def run(self):
         self.setup_environment()

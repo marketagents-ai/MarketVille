@@ -116,7 +116,7 @@ def propose_topic(proposal: TopicProposal):
     if proposal.agent_id != proposers.get(cohort_id):
         raise HTTPException(status_code=403, detail="Agent is not the proposer for this cohort")
     topics[cohort_id] = proposal.topic
-    logger.info(f"Topic proposed for {cohort_id} by {proposal.agent_id}: {proposal.topic}")
+    logger.debug(f"Topic proposed for {cohort_id} by {proposal.agent_id}: {proposal.topic}")
     return {"message": "Topic accepted"}
 
 # Endpoint to get the topic for a cohort
@@ -142,7 +142,7 @@ def post_message(message: Message):
         "sub_round_num": message.sub_round_num,
     }
     messages[cohort_id].append(message_entry)
-    logger.info(f"Message from {message.agent_id} in {cohort_id}: {message.content}")
+    logger.debug(f"Message from {message.agent_id} in {cohort_id}: {message.content}")
     return {"message": "Message posted"}
 
 # Endpoint to get messages for a cohort

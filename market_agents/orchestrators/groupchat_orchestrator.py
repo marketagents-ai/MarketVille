@@ -313,17 +313,17 @@ class GroupChatOrchestrator:
                     'messages': agent_messages[-1] if agent_messages else None
                 }
 
-            # Agents perceive the messages
-            perceptions = await self.cognitive_processor.run_parallel_perceive(cohort_agents, self.config.name)
-            # Log personas and perceptions
-            for agent, perception in zip(cohort_agents, perceptions):
-                log_persona(self.logger, agent.index, agent.persona)
-                log_perception(
-                    self.logger, 
-                    agent.index, 
-                    perception.json_object.object if perception and perception.json_object else None
-                )
-                agent.last_perception = perception.json_object.object if perception.json_object else perception.str_content
+        #    # Agents perceive the messages
+        #    perceptions = await self.cognitive_processor.run_parallel_perceive(cohort_agents, self.config.name)
+        #    # Log personas and perceptions
+        #    for agent, perception in zip(cohort_agents, perceptions):
+        #        log_persona(self.logger, agent.index, agent.persona)
+        #        log_perception(
+        #            self.logger, 
+        #            agent.index, 
+        #            perception.json_object.object if perception and perception.json_object else None
+        #        )
+        #        agent.last_perception = perception.json_object.object if perception.json_object else perception.str_content
 
             # Agents generate actions (messages)
             actions = await self.cognitive_processor.run_parallel_action(cohort_agents, self.config.name)

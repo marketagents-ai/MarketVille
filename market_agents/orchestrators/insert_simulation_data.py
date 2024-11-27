@@ -266,9 +266,14 @@ class SimulationDataInserter:
             raise
 
     def insert_trades(self, trades_data: List[Dict[str, Any]], agent_id_map: Dict[str, uuid.UUID]):
+        # Add logging to debug the incoming data
+        logging.info(f"Attempting to insert trades: {trades_data}")
+        logging.info(f"Agent ID map: {agent_id_map}")
+        
         query = """
         INSERT INTO trades (buyer_id, seller_id, quantity, price, buyer_surplus, seller_surplus, total_surplus, round)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
         """
         try:
             with self.conn.cursor() as cur:
@@ -277,10 +282,9 @@ class SimulationDataInserter:
                     seller_id = agent_id_map.get(str(trade['seller_id']))
                     
                     if buyer_id is None or seller_id is None:
-                        logging.error(f"No matching UUID found for buyer_id: {trade['buyer_id']} or seller_id: {trade['seller_id']}")
+                        logging.error(f"Missing agent mapping - buyer_id: {trade['buyer_id']}, seller_id: {trade['seller_id']}")
                         continue
-
-                    cur.execute(query, (
+                    values = (
                         buyer_id,
                         seller_id,
                         trade['quantity'],
@@ -289,12 +293,19 @@ class SimulationDataInserter:
                         trade['seller_surplus'],
                         trade['total_surplus'],
                         trade['round']
-                    ))
+                    )
+                    logging.info(f"Inserting trade with values: {values}")
+                    
+                    cur.execute(query, values)
+                    trade_id = cur.fetchone()[0]
+                    logging.info(f"Successfully inserted trade with ID: {trade_id}")
+                    
             self.conn.commit()
-            logging.info(f"Inserted {len(trades_data)} trades into the database")
+            logging.info(f"Successfully committed {len(trades_data)} trades to database")
         except Exception as e:
             self.conn.rollback()
             logging.error(f"Error inserting trades: {str(e)}")
+            logging.exception("Full exception details:")
             raise
 
     def insert_interactions(self, interactions: List[Dict[str, Any]], agent_id_map: Dict[str, uuid.UUID]):
@@ -677,29 +688,29 @@ class SimulationDataInserter:
             logging.info("Preparing trades data")
             trades_data = []
             if hasattr(tracker, 'all_trades'):
-                for trade in tracker.all_trades:
-                    buyer_id = str(trade.buyer_id)
-                    seller_id = str(trade.seller_id)
-                    buyer = next((agent for agent in agents if str(agent.id) == buyer_id), None)
-                    seller = next((agent for agent in agents if str(agent.id) == seller_id), None)
-                    if buyer and seller:
-                        buyer_surplus = buyer.economic_agent.calculate_individual_surplus()
-                        seller_surplus = seller.economic_agent.calculate_individual_surplus()
-                        total_surplus = buyer_surplus + seller_surplus
-
+                logging.info(f"Found {len(tracker.all_trades)} trades in tracker")
+                for trade_info in tracker.all_trades:
+                    # The trade_info is now a dictionary from the AuctionTracker
+                    try:
                         trades_data.append({
-                            'buyer_id': buyer_id,
-                            'seller_id': seller_id,
-                            'quantity': trade.quantity,
-                            'price': trade.price,
-                            'buyer_surplus': buyer_surplus,
-                            'seller_surplus': seller_surplus,
-                            'total_surplus': total_surplus,
-                            'round': round_num
+                            'buyer_id': trade_info['buyer_id'],
+                            'seller_id': trade_info['seller_id'],
+                            'quantity': trade_info['quantity'],
+                            'price': trade_info['price'],
+                            'buyer_surplus': trade_info['buyer_surplus'],
+                            'seller_surplus': trade_info['seller_surplus'],
+                            'total_surplus': trade_info['total_surplus'],
+                            'round': trade_info['round']
                         })
+                        logging.info(f"Processed trade: {trades_data[-1]}")
+                    except Exception as e:
+                        logging.error(f"Error processing trade {trade_info}: {str(e)}")
 
             if trades_data:
+                logging.info(f"Attempting to insert {len(trades_data)} trades")
                 self.insert_trades(trades_data, agent_id_map)
+            else:
+                logging.warning("No trades data found to insert")
 
             # Group chat data
             groupchat_data = []

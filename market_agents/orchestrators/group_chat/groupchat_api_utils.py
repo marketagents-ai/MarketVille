@@ -124,7 +124,7 @@ class GroupChatAPIUtils:
                     if resp.status == 200:
                         data = await resp.json()
                         topic = data.get('topic', '')
-                        self.logger.info(f"Retrieved topic for cohort {cohort_id}: {topic}")
+                        self.logger.debug(f"Retrieved topic for cohort {cohort_id}: {topic}")
                         return topic
                     else:
                         error_detail = await resp.text()

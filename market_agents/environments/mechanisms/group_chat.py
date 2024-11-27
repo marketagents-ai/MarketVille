@@ -12,7 +12,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 class GroupChatMessage(BaseModel):
-    content: str = Field(description="agent's opinions & arguments on the topic")
+    content: str = Field(description="agent's opinions & arguments on the topic. express yourself with emojis")
     
 class GroupChatAction(LocalAction):
     action: GroupChatMessage
@@ -173,7 +173,7 @@ class GroupChat(Mechanism):
     def _update_topic(self, new_topic: str, round_num: int):
         self.topics[round_num] = new_topic
         self.current_topic = new_topic
-        logger.info(f"Updated topic for round {round_num} to: {new_topic}")
+        logger.debug(f"Updated topic for round {round_num} to: {new_topic}")
 
     def _create_observations(self, new_messages: List[GroupChatMessage]) -> Dict[str, GroupChatLocalObservation]:
         observations = {}
