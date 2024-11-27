@@ -80,7 +80,7 @@ class AuctionOrchestrator(BaseEnvironmentOrchestrator):
         self.tracker = AuctionTracker()
         self.agent_surpluses: Dict[str, float] = {}
         self.logger = logger or logging.getlogger(__name__)
-        self.cognitive_processor = AgentCognitiveProcessor(ai_utils, data_inserter, self.logger)
+        self.cognitive_processor = AgentCognitiveProcessor(ai_utils, data_inserter, self.logger, self.orchestrator_config.tool_mode)
 
         
     async def setup_environment(self):
