@@ -296,6 +296,31 @@ class EthereumInterface:
         tx_hash = w3.eth.send_raw_transaction(signed_txn.raw_transaction)
         
         return tx_hash.hex()
+        
+    @external
+    def get_token_address(self, symbol: str) -> str:
+        """Get token address by symbol"""
+        try:
+            # Get the index from token_symbols list
+            index = self.testnet_data['token_symbols'].index(symbol)
+            # Use that index to get the address from token_addresses list
+            return self.testnet_data['token_addresses'][index]
+        except (ValueError, IndexError) as e:
+            available_tokens = self.testnet_data['token_symbols']
+            raise ValueError(f"Token symbol '{symbol}' not found. Available tokens: {available_tokens}")
+        except KeyError as e:
+            raise KeyError(f"Missing required data in testnet_data.json: {str(e)}")  
+        
+    @external
+    def get_token_symbol(self, address: str) -> str:
+        """Get token symbol by address"""
+        try:
+            index = self.testnet_data['token_addresses'].index(address)
+            return self.testnet_data['token_symbols'][index]
+        except ValueError:
+            raise ValueError(f"Token address '{address}' not found")
+        except KeyError:
+            raise KeyError("Token data not properly loaded from testnet_data.json")
 
 @init
 def initialize_evm_interface() -> EthereumInterface:

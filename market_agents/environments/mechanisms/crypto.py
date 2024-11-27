@@ -103,12 +103,41 @@ class CryptoMarketMechanism(Mechanism):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    def register_agent(self, agent_id: str, agent: CryptoEconomicAgent):
+        """Register an agent with the mechanism."""
+        if not isinstance(agent, CryptoEconomicAgent):
+            raise ValueError(f"Agent must be a CryptoEconomicAgent, got {type(agent)}")
+        
+        self.agent_registry[str(agent_id)] = agent
+        logger.info(f"Registered agent {agent_id} with address {agent.ethereum_address}")
 
     def setup(self):
-        """Initialize token addresses and other blockchain parameters."""
+        """Initialize token addresses, blockchain parameters, and current price."""
         self.token_addresses = self.ethereum_interface.testnet_data['token_addresses']
         self.orderbook_address = self.ethereum_interface.testnet_data['orderbook_address']
-        self.minter_private_key = self.ethereum_interface.accounts[0]['private_key']  # Use the first account as minter
+        self.minter_private_key = self.ethereum_interface.accounts[0]['private_key']
+        
+        # Initialize current price from orderbook
+        try:
+            token_address = self.ethereum_interface.get_token_address(self.coin_name)
+            usdc_address = self.ethereum_interface.get_token_address('USDC')
+            
+            pair_info = self.ethereum_interface.get_pair_info(
+                token_address,
+                usdc_address
+            )
+            
+            self.current_price = pair_info['token0_price_in_token1']
+            # If price is 0, fall back to default
+            if self.current_price == 0:
+                self.current_price = 0.1  # Default fallback price
+                
+        except Exception as e:
+            logger.warning(f"Failed to get initial price from blockchain: {str(e)}. Using default price of 0.1")
+            self.current_price = 0.1
+            
+        # Initialize price history with current price
+        self.price_history = [self.current_price]
 
     def step(self, action: GlobalCryptoMarketAction) -> EnvironmentStep:
         self.current_round += 1
@@ -150,39 +179,86 @@ class CryptoMarketMechanism(Mechanism):
                 continue
 
             try:
+                # Get the economic agent which has the ethereum details
+                economic_agent = agent.economic_agent if hasattr(agent, 'economic_agent') else agent
+                
+                # Verify ethereum address exists
+                if not hasattr(economic_agent, 'ethereum_address') or not economic_agent.ethereum_address:
+                    logger.error(f"Agent {agent_id} has no ethereum_address")
+                    continue
+
+                # Log the agent's details for debugging
+                logger.debug(f"Processing action for agent {agent_id}")
+                logger.debug(f"Agent ethereum address: {economic_agent.ethereum_address}")
+                logger.debug(f"Action: {market_action}")
+
                 if market_action.order_type == OrderType.BUY:
-                    trade = self._execute_buy(agent, market_action)
+                    trade = self._execute_buy(economic_agent, market_action)
                 elif market_action.order_type == OrderType.SELL:
-                    trade = self._execute_sell(agent, market_action)
+                    trade = self._execute_sell(economic_agent, market_action)
                 else:
                     logger.warning(f"Invalid order type from agent {agent_id}: {market_action.order_type}")
                     continue
+
                 if trade:
                     trades.append(trade)
+                    logger.info(f"Trade executed for agent {agent_id}: {trade}")
             except Exception as e:
                 logger.error(f"Error processing action for agent {agent_id}: {str(e)}")
+                logger.exception("Full traceback:")  # This will log the full stack trace
+                continue
 
         return trades
 
     def _execute_buy(self, agent: CryptoEconomicAgent, market_action: MarketAction) -> Optional[Trade]:
-        """Agent buys tokens using ETH."""
-        source_token_address = self.ethereum_interface.testnet_data['eth_address']  # ETH address placeholder
-        target_token_address = self.token_addresses[0]  # Assuming the first token is the one being traded
+        """Agent buys tokens using USDC."""
+        source_token_address = self.ethereum_interface.get_token_address('USDC')
+        target_token_address = self.ethereum_interface.get_token_address(self.coin_name)
 
-        # Agent must approve the orderbook to spend their ETH (handled internally)
-        # Since ETH doesn't require approval, we can proceed directly
+        # Get token decimals
+        usdc_decimals = self.ethereum_interface.get_erc20_info(source_token_address)['decimals']
+        token_decimals = self.ethereum_interface.get_erc20_info(target_token_address)['decimals']
 
-        # Execute swap on the orderbook contract
+        # Convert amounts to proper decimals
+        usdc_amount = int(market_action.price * market_action.quantity * (10 ** usdc_decimals))
+        token_amount = int(market_action.quantity * (10 ** token_decimals))
+
+        # Check USDC balance (compare in same units)
+        usdc_balance = self.ethereum_interface.get_erc20_balance(
+            agent.ethereum_address,
+            source_token_address
+        )
+        if usdc_balance < usdc_amount:
+            logger.error(f"Agent {agent.id} has insufficient USDC balance. " + 
+                        f"Has: {usdc_balance / 10**usdc_decimals}, " +
+                        f"Needs: {market_action.price * market_action.quantity}")
+            return None
+
+        # Rest of the buy logic with proper decimal handling...
+        allowance = self.ethereum_interface.get_erc20_allowance(
+            owner=agent.ethereum_address,
+            spender=self.orderbook_address,
+            contract_address=source_token_address
+        )
+        
+        if allowance < usdc_amount:
+            tx_hash = self.ethereum_interface.approve_erc20(
+                spender=self.orderbook_address,
+                amount=usdc_amount,
+                contract_address=source_token_address,
+                private_key=agent.private_key
+            )
+            logger.info(f"Agent {agent.id} approved {usdc_amount/(10**usdc_decimals)} USDC. TxHash: {tx_hash}")
+
         tx_hash = self.ethereum_interface.swap(
             source_token_address=source_token_address,
-            source_token_amount=market_action.price * market_action.quantity,
+            source_token_amount=usdc_amount,
             target_token_address=target_token_address,
             private_key=agent.private_key
         )
-        logger.info(f"Agent {agent.id} executed buy. TxHash: {tx_hash}")
+        logger.info(f"Agent {agent.id} executed buy {market_action.quantity} {self.coin_name} for {usdc_amount/(10**usdc_decimals)} USDC. TxHash: {tx_hash}")
 
-        # Record the trade
-        trade = Trade(
+        return Trade(
             trade_id=len(self.trades),
             buyer_id=agent.id,
             seller_id="Orderbook",
@@ -190,42 +266,55 @@ class CryptoMarketMechanism(Mechanism):
             bid_price=market_action.price,
             ask_price=market_action.price,
             quantity=market_action.quantity,
-            coin=self.coin
+            coin=self.coin_name
         )
-        return trade
 
     def _execute_sell(self, agent: CryptoEconomicAgent, market_action: MarketAction) -> Optional[Trade]:
-        """Agent sells tokens for ETH."""
-        source_token_address = self.token_addresses[0]  # Assuming the first token is the one being traded
-        target_token_address = self.ethereum_interface.testnet_data['eth_address']  # ETH address placeholder
+        """Agent sells tokens for USDC."""
+        source_token_address = self.ethereum_interface.get_token_address(self.coin_name)
+        target_token_address = self.ethereum_interface.get_token_address('USDC')
 
-        # Agent must approve the orderbook to spend their tokens
+        # Get token decimals
+        token_decimals = self.ethereum_interface.get_erc20_info(source_token_address)['decimals']
+        usdc_decimals = self.ethereum_interface.get_erc20_info(target_token_address)['decimals']
+
+        # Convert quantity to proper decimals
+        token_amount = int(market_action.quantity * (10 ** token_decimals))
+
+        # Check token balance
+        token_balance = self.ethereum_interface.get_erc20_balance(
+            agent.ethereum_address,
+            source_token_address
+        )
+        if token_balance < token_amount:
+            logger.error(f"Agent {agent.id} has insufficient {self.coin_name} balance. Has: {token_balance/(10**token_decimals)}, Needs: {market_action.quantity}")
+            return None
+
+        # Rest of the sell logic with proper decimal handling...
         allowance = self.ethereum_interface.get_erc20_allowance(
             owner=agent.ethereum_address,
             spender=self.orderbook_address,
             contract_address=source_token_address
         )
-        if allowance < market_action.quantity:
-            # Approve the required amount
+        
+        if allowance < token_amount:
             tx_hash = self.ethereum_interface.approve_erc20(
                 spender=self.orderbook_address,
-                amount=market_action.quantity,
+                amount=token_amount,
                 contract_address=source_token_address,
                 private_key=agent.private_key
             )
-            logger.info(f"Agent {agent.id} approved {market_action.quantity} tokens. TxHash: {tx_hash}")
+            logger.info(f"Agent {agent.id} approved {market_action.quantity} {self.coin_name}. TxHash: {tx_hash}")
 
-        # Execute swap on the orderbook contract
         tx_hash = self.ethereum_interface.swap(
             source_token_address=source_token_address,
-            source_token_amount=market_action.quantity,
+            source_token_amount=token_amount,
             target_token_address=target_token_address,
             private_key=agent.private_key
         )
-        logger.info(f"Agent {agent.id} executed sell. TxHash: {tx_hash}")
+        logger.info(f"Agent {agent.id} executed sell {market_action.quantity} {self.coin_name} for {market_action.price * market_action.quantity} USDC. TxHash: {tx_hash}")
 
-        # Record the trade
-        trade = Trade(
+        return Trade(
             trade_id=len(self.trades),
             buyer_id="Orderbook",
             seller_id=agent.id,
@@ -233,10 +322,8 @@ class CryptoMarketMechanism(Mechanism):
             bid_price=market_action.price,
             ask_price=market_action.price,
             quantity=market_action.quantity,
-            coin=self.coin
+            coin=self.coin_name
         )
-        return trade
-
     def _update_price(self, trades: List[Trade]):
         if trades:
             prices = [trade.price for trade in trades]

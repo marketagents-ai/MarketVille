@@ -61,7 +61,7 @@ class OrchestratorConfig(BaseSettings):
     environment_order: List[str]
     protocol: str
     database_config: DatabaseConfig = DatabaseConfig()
-
+    tool_mode: bool
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
 def load_config(config_path: Path) -> OrchestratorConfig:

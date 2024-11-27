@@ -4,6 +4,7 @@ import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+import uuid
 from market_agents.environments.environment import MultiAgentEnvironment
 from market_agents.agents.market_agent import MarketAgent
 from market_agents.environments.mechanisms.group_chat import GroupChat, GroupChatActionSpace, GroupChatObservationSpace
@@ -16,8 +17,7 @@ from market_agents.orchestrators.logger_utils import (
     log_cohort_formation,
     log_topic_proposal,
     log_sub_round_start,
-    log_group_message,
-    log_reflection,
+    log_group_message
 )
 from market_agents.orchestrators.insert_simulation_data import SimulationDataInserter
 
@@ -53,7 +53,7 @@ class GroupChatOrchestrator:
         self.api_utils = GroupChatAPIUtils(self.config.groupchat_api_url, self.logger)
 
         # Initialize cognitive processor
-        self.cognitive_processor = AgentCognitiveProcessor(ai_utils, data_inserter, self.logger)
+        self.cognitive_processor = AgentCognitiveProcessor(ai_utils, data_inserter, self.logger, self.orchestrator_config.tool_mode)
 
         # Agent dictionary for quick lookup
         self.agent_dict = {agent.id: agent for agent in agents}
@@ -179,6 +179,8 @@ class GroupChatOrchestrator:
         log_section(self.logger, "AGENT REFLECTIONS")
         await self.cognitive_processor.run_parallel_reflect(self.agents, self.config.name)
 
+        await self.process_round_results(round_num)
+
         # Store round summary
         round_summary = await self.get_round_summary(round_num)
         self.round_summaries.append(round_summary)
@@ -217,11 +219,13 @@ class GroupChatOrchestrator:
             proposer_agent = self.agent_dict[proposer_id]
             # Set system message for proposer
             good_name = self.orchestrator_config.agent_config.good_name
-            proposer_agent.system = f"You are the group chat topic proposer agent. Your role is to propose interesting and relevant topics for group discussion about {good_name}."
+            proposer_agent_task = f"You are the group chat topic proposer agent. Your role is to propose interesting and relevant topics for group discussion about {good_name}.\n"
+            proposer_agent_task += f"Consider recent events, trends, or news related to {good_name}. Propose a specific topic for discussion that would be relevant to market participants. Please describe the topic in detail."
             prompt = await proposer_agent.generate_action(
                 self.config.name,
-                f"Consider recent events, trends, or news related to {good_name}. Propose a specific topic for discussion that would be relevant to market participants.",
-                return_prompt=True
+                proposer_agent_task,
+                return_prompt=True,
+                structured_tool=self.orchestrator_config.tool_mode
             )
             proposer_agents.append((cohort_id, proposer_agent))
             proposer_prompts.append(prompt)
@@ -230,7 +234,6 @@ class GroupChatOrchestrator:
         proposals = await self.ai_utils.run_parallel_ai_completion(proposer_prompts, update_history=False)
         self.data_inserter.insert_ai_requests(self.ai_utils.get_all_requests())
 
-        # Submit topics via API
         tasks = []
         for (cohort_id, proposer_agent), proposal in zip(proposer_agents, proposals):
             topic = self.extract_topic_from_proposal(proposal)
@@ -262,9 +265,7 @@ class GroupChatOrchestrator:
         try:
             if proposal.json_object:
                 action_content = proposal.json_object.object
-                if 'content' in action_content:
-                    topic = action_content['content']
-                elif 'action' in action_content and 'content' in action_content['action']:
+                if 'action' in action_content and 'content' in action_content['action']:
                     topic = action_content['action']['content']
                 else:
                     topic = None
@@ -291,44 +292,56 @@ class GroupChatOrchestrator:
             sub_round_num (int): The current sub-round number.
             cohort_agents (List[MarketAgent]): The agents in the cohort.
         """
+        # First try block for cognitive processes
         try:
             # Get topic and messages from API
             topic = await self.api_utils.get_topic(cohort_id)
             messages = await self.api_utils.get_messages(cohort_id)
 
             if not topic:
-                self.logger.error(f"No topic found for cohort {cohort_id}")
+                self.logger.warning(f"No topic found for cohort {cohort_id}")
                 return
 
-            # Update agents' last observation
+            # Get the cohort's environment mechanism and update topic
+            environment = cohort_agents[0].environments['group_chat']
+            environment.mechanism._update_topic(topic, round_num)
+
             for agent in cohort_agents:
+                # Filter messages to only include this agent's messages
+                agent_messages = [msg for msg in messages if msg.get('agent_id') == agent.id]
                 agent.last_observation = {
-                    'messages': messages,
-                    'current_topic': topic
+                    'messages': agent_messages[-1] if agent_messages else None
                 }
 
-            # Agents perceive the messages
-            perceptions = await self.cognitive_processor.run_parallel_perceive(cohort_agents, self.config.name)
-            # Log personas and perceptions
-            for agent, perception in zip(cohort_agents, perceptions):
-                log_persona(self.logger, agent.index, agent.persona)
-                log_perception(
-                    self.logger, 
-                    agent.index, 
-                    perception.json_object.object if perception and perception.json_object else None
-                )
-                agent.last_perception = perception.json_object.object if perception.json_object else perception.str_content
-
+        #    # Agents perceive the messages
+        #    perceptions = await self.cognitive_processor.run_parallel_perceive(cohort_agents, self.config.name)
+        #    # Log personas and perceptions
+        #    for agent, perception in zip(cohort_agents, perceptions):
+        #        log_persona(self.logger, agent.index, agent.persona)
+        #        log_perception(
+        #            self.logger, 
+        #            agent.index, 
+        #            perception.json_object.object if perception and perception.json_object else None
+        #        )
+        #        agent.last_perception = perception.json_object.object if perception.json_object else perception.str_content
 
             # Agents generate actions (messages)
             actions = await self.cognitive_processor.run_parallel_action(cohort_agents, self.config.name)
 
-            # Post messages via API
-            tasks = []
+        except Exception:
+            return
+
+        # Second try block for data insertion
+        try:
+            # Prepare messages for both API posting and database insertion
+            messages_to_insert = []
+            api_tasks = []
+
             for agent, action in zip(cohort_agents, actions):
                 content = self.extract_message_content(action)
                 if content:
-                    task = asyncio.create_task(
+                    # Prepare API task
+                    api_task = asyncio.create_task(
                         self.api_utils.post_message(
                             agent_id=agent.id,
                             cohort_id=cohort_id,
@@ -337,15 +350,46 @@ class GroupChatOrchestrator:
                             sub_round_num=sub_round_num
                         )
                     )
-                    tasks.append(task)
+                    api_tasks.append(api_task)
+
+                    messages_to_insert.append({
+                        'message_id': str(uuid.uuid4()),
+                        'agent_id': str(agent.id),
+                        'round': round_num,
+                        'sub_round': sub_round_num,
+                        'cohort_id': cohort_id,
+                        'content': content,
+                        'timestamp': datetime.now(),
+                        'topic': topic
+                    })
+
+                    # Update agent state and log
                     agent.last_action = content
                     log_group_message(self.logger, cohort_id, agent.index, content, sub_round_num)
                 else:
-                    self.logger.error(f"Failed to extract message content for agent {agent.id}")
-            await asyncio.gather(*tasks)
+                    self.logger.warning(f"Failed to extract message content for agent {agent.id}")
+
+            # Execute API posts in parallel
+            await asyncio.gather(*api_tasks)
+            agents_data = [
+                {
+                    'id': str(agent.id),
+                    'role': agent.role,
+                    'is_llm': agent.use_llm,
+                    'max_iter': self.config.max_rounds,
+                    'llm_config': agent.llm_config if isinstance(agent.llm_config, dict) else agent.llm_config.dict()
+                }
+                for agent in cohort_agents
+            ]
+            
+            # Get agent ID mappings
+            agent_id_map = self.data_inserter.insert_agents(agents_data)
+            # Insert messages into database
+            if messages_to_insert:
+                self.data_inserter.insert_groupchat_messages(messages_to_insert, round_num, agent_id_map)
 
         except Exception as e:
-            self.logger.error(f"Error during sub-round {sub_round_num} for cohort {cohort_id}: {e}")
+            self.logger.warning(f"Error during data insertion in sub-round {sub_round_num} for cohort {cohort_id}: {e}")
 
     def extract_message_content(self, action) -> Optional[str]:
         """
@@ -372,17 +416,28 @@ class GroupChatOrchestrator:
             return None
 
     async def process_round_results(self, round_num: int):
-        """Process and store results from the current round"""
+        """
+        Process and store the results of a round in the database.
+        
+        Args:
+            round_num (int): The current round number
+        """
         try:
-            # Store round data
-            self.data_inserter.insert_round_data(
-                round_num=round_num,
-                agents=self.agents,
-                environments={},
-                config=self.orchestrator_config,
-                trackers={}
-            )
-            self.logger.info(f"Data for round {round_num} inserted successfully.")
+            # For each cohort, we need to process its environment
+            for cohort_id, cohort_agents in self.cohorts.items():
+                # Get the cohort-specific environment name
+                cohort_env_name = f"group_chat_{cohort_id}"
+                environment = cohort_agents[0].environments['group_chat']
+                
+                self.data_inserter.insert_round_data(
+                    round_num=round_num,
+                    agents=cohort_agents,
+                    environment=environment,
+                    config=self.orchestrator_config,
+                    tracker=None,
+                    environment_name=cohort_env_name
+                )
+                self.logger.info(f"Data for round {round_num}, cohort {cohort_id} inserted successfully.")
 
             # Store round summary
             round_summary = await self.get_round_summary(round_num)
@@ -390,6 +445,7 @@ class GroupChatOrchestrator:
 
         except Exception as e:
             self.logger.error(f"Error processing round {round_num} results: {str(e)}")
+            self.logger.exception("Exception details:")
             raise e
 
     async def get_round_summary(self, round_num: int) -> Dict[str, Any]:

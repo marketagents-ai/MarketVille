@@ -87,6 +87,67 @@ class CryptoEconomicAgent(BaseEconomicAgent):
         if crypto:
             return crypto.average_cost()
         return 0.0
+    
+    def calculate_trade_reward(self, trade: Trade, current_market_price: float) -> float:
+        """Calculate reward/profit from a trade using provided market price"""
+        try:
+            if trade.buyer_id == self.id:
+                # Buyer's profit = Current value - Cost basis
+                cost_basis = trade.price * trade.quantity
+                current_value = current_market_price * trade.quantity
+                profit = current_value - cost_basis
+                return profit
+                
+            elif trade.seller_id == self.id:
+                # Seller's profit = Sale proceeds - Cost basis
+                sale_proceeds = trade.price * trade.quantity
+                cost_basis = self.calculate_cost_basis(trade.quantity)
+                profit = sale_proceeds - cost_basis
+                return profit
+                
+            return 0.0
+        except Exception as e:
+            logger.error(f"Error calculating trade reward: {str(e)}")
+            return 0.0
+        
+    def calculate_cost_basis(self, quantity_to_sell: int) -> float:
+        """
+        Calculate the cost basis for a given quantity using FIFO (First-In, First-Out)
+        Returns the total cost basis for the specified quantity
+        """
+        try:
+            total_cost_basis = 0.0
+            remaining_quantity = quantity_to_sell
+            
+            # Find the crypto object for the coin
+            crypto = next((c for c in self.current_portfolio.coins if c.symbol == self.coin), None)
+            if not crypto or not crypto.positions:
+                logger.warning(f"No positions found for {self.coin}")
+                return 0.0
+                
+            # Use FIFO to calculate cost basis
+            positions_to_process = crypto.positions.copy()  # Work with a copy to not modify original
+            while remaining_quantity > 0 and positions_to_process:
+                position = positions_to_process[0]
+                quantity_from_position = min(position.quantity, remaining_quantity)
+                
+                # Add to cost basis
+                position_cost = quantity_from_position * position.purchase_price
+                total_cost_basis += position_cost
+                
+                remaining_quantity -= quantity_from_position
+                if quantity_from_position == position.quantity:
+                    positions_to_process.pop(0)
+                
+            if remaining_quantity > 0:
+                logger.warning(f"Not enough positions to cover quantity {quantity_to_sell}")
+                return 0.0
+                
+            return total_cost_basis
+            
+        except Exception as e:
+            logger.error(f"Error calculating cost basis: {str(e)}")
+            return 0.0
 
     def generate_order(self, market_price: float) -> Optional[MarketAction]:
         average_cost = self.calculate_average_cost()
@@ -188,7 +249,6 @@ class CryptoEconomicAgent(BaseEconomicAgent):
         print(f"  Portfolio Value: {portfolio_value:.2f}")
         print(f"  Unrealized Profit: {unrealized_profit:.2f}")
 
-    # Override methods from BaseEconomicAgent that are not applicable to crypto trading
     def is_buyer(self, good_name: str) -> bool:
         return good_name == self.coin
 
@@ -208,8 +268,8 @@ class CryptoEconomicAgent(BaseEconomicAgent):
     def calculate_individual_surplus(self) -> float:
         # Calculate surplus as current utility minus initial utility
         initial_crypto_quantity = self.endowment.initial_portfolio.get_crypto_quantity(self.coin)
-        initial_portfolio_value = self.endowment.initial_portfolio.cash + initial_crypto_quantity * 1.0  # Assuming initial market price is $1.0
-        current_portfolio_value = self.calculate_portfolio_value(market_price=1.0)  # Using the same placeholder
+        initial_portfolio_value = self.endowment.initial_portfolio.cash + initial_crypto_quantity * 1.0
+        current_portfolio_value = self.calculate_portfolio_value(market_price=1.0)
         surplus = current_portfolio_value - initial_portfolio_value
         return surplus
     

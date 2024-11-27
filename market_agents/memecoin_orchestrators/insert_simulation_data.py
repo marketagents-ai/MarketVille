@@ -10,6 +10,7 @@ import json
 import logging
 from datetime import datetime
 from market_agents.memecoin_orchestrators.crypto_models import OrderType
+from market_agents.memecoin_orchestrators.setup_database import create_database, create_tables
 
 def json_serial(obj):
     """JSON serializer for objects not serializable by default json code"""
@@ -39,14 +40,11 @@ def serialize_memory_data(memory_data):
 
 class SimulationDataInserter:
     def __init__(self, db_params):
-        self.conn = psycopg2.connect(
-            dbname=db_params.get('dbname', 'market_simulation'),
-            user=db_params.get('user', 'db_user'),
-            password=db_params.get('password', 'db_pwd@123'),
-            host=db_params.get('host', 'localhost'),
-            port=db_params.get('port', '5433')
-        )
+        create_database(db_params)
+        self.conn = psycopg2.connect(**db_params)
         self.cursor = self.conn.cursor()
+
+        create_tables(db_params)
 
     def __del__(self):
         if self.cursor:
@@ -54,43 +52,59 @@ class SimulationDataInserter:
         if self.conn:
             self.conn.close()
 
-    def insert_agents(self, agents_data: List[Dict[str, Any]]) -> Dict[str, uuid.UUID]:
+    def insert_agents(self, agents_data):
         query = """
-        INSERT INTO agents (id, role, active, current_round, config, created_at)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        ON CONFLICT (id) DO UPDATE 
-        SET role = EXCLUDED.role,
-            active = EXCLUDED.active,
-            current_round = EXCLUDED.current_round,
-            config = EXCLUDED.config,
-            created_at = EXCLUDED.created_at
-        RETURNING id;
+            INSERT INTO agents (id, role, is_llm, active, current_round, max_iter, llm_config, config)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET
+                role = EXCLUDED.role,
+                is_llm = EXCLUDED.is_llm,
+                active = EXCLUDED.active,
+                current_round = EXCLUDED.current_round,
+                max_iter = EXCLUDED.max_iter,
+                llm_config = EXCLUDED.llm_config,
+                config = EXCLUDED.config
+            RETURNING id
         """
-        
         agent_id_map = {}
-        
         for agent in agents_data:
             try:
-                with self.conn.cursor() as cur:
-                    agent_uuid = uuid.UUID(str(agent['agent_id']))
-                    cur.execute(query, (
-                        agent_uuid,
-                        agent.get('role', 'TRADER'),
-                        agent.get('active', True),
-                        agent.get('round', 0),
-                        json.dumps(agent.get('config', {}), default=json_serial),
-                        datetime.now()
-                    ))
-                    returned_id = cur.fetchone()[0]
-                    agent_id_map[str(agent['agent_id'])] = returned_id
-                    self.conn.commit()  # Commit each agent individually
-                    
-            except Exception as e:
-                self.conn.rollback()
-                logging.error(f"Error processing agent {agent.get('agent_id', 'unknown')}: {e}")
-                logging.error(f"Agent data: {agent}")
-                continue
+                agent_id = uuid.UUID(str(agent['agent_id'])) if isinstance(agent['agent_id'], (str, int)) else agent['agent_id']
                 
+                # Set default values for required fields
+                is_llm = agent.get('is_llm', True)
+                max_iter = agent.get('max_iter', 100)
+                llm_config = agent.get('llm_config', {})
+                
+                with self.conn.cursor() as cur:
+                    cur.execute(query, (
+                        agent_id,
+                        agent['role'],
+                        is_llm,
+                        agent.get('active', True),
+                        agent.get('round', 1),
+                        max_iter,
+                        json.dumps(llm_config),
+                        json.dumps(agent.get('config', {}))
+                    ))
+                    inserted_id = cur.fetchone()
+                    if inserted_id:
+                        agent_id_map[str(agent['agent_id'])] = inserted_id[0]
+                        logging.info(f"Successfully inserted/updated agent: {agent_id}")
+                    else:
+                        logging.warning(f"No id returned for agent: {agent['id']}")
+                self.conn.commit()
+            except Exception as e:
+                logging.error(f"Error processing agent {agent.get('agent_id')}: {str(e)}")
+                logging.error(f"Agent data: {agent}")
+                self.conn.rollback()
+                continue
+        
+        if not agent_id_map:
+            logging.error("No agents were successfully inserted/updated")
+        else:
+            logging.info(f"Successfully processed {len(agent_id_map)} agents")
+        
         return agent_id_map
 
     def json_serial(self, obj):

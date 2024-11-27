@@ -259,7 +259,7 @@ class EconomicAgent(BaseModel):
                 if not bids:
                     del self.pending_orders[trade.good_name]
             else:
-                raise ValueError(f"Trade {trade.trade_id} processed but matching bid not found for agent {self.id}")
+                logger.info(f"Trade {trade.trade_id} processed but matching bid not found for agent {self.id} - this is normal if the trade was matched by the market mechanism")
         elif self.is_seller(trade.good_name) and trade.seller_id == self.id:
             # Find the exactly matching ask from pending_orders
             asks = self.pending_orders.get(trade.good_name, [])
@@ -269,10 +269,10 @@ class EconomicAgent(BaseModel):
                 if not asks:
                     del self.pending_orders[trade.good_name]
             else:
-                raise ValueError(f"Trade {trade.trade_id} processed but matching ask not found for agent {self.id}")
+                logger.info(f"Trade {trade.trade_id} processed but matching ask not found for agent {self.id} - this is normal if the trade was matched by the market mechanism")
         else:
             raise ValueError(f"Agent is neither a buyer nor a seller for trade {trade}")
-        # Only update the endowment after passing the value error checks
+
         old_utility = self.calculate_utility(self.endowment.current_basket)
         self.endowment.add_trade(trade)
         new_utility = self.calculate_utility(self.endowment.current_basket)
