@@ -84,7 +84,7 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
         self.environment = None
         self.tracker = CryptoTracker()
         self.agent_rewards: Dict[str, float] = {}
-        self.cognitive_processor = AgentCognitiveProcessor(ai_utils, data_inserter, logger)
+        self.cognitive_processor = AgentCognitiveProcessor(ai_utils, data_inserter, logger, tool_mode=self.orchestrator_config.tool_mode)
 
         # Initialize EthereumInterface
         self.ethereum_interface = EthereumInterface()
@@ -140,7 +140,7 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
         # Create the crypto market mechanism
         crypto_mechanism = CryptoMarketMechanism(
             max_rounds=self.config.max_rounds,
-            coin=self.orchestrator_config.agent_config.coin_name,
+            coin=self.orchestrator_config.agent_config.asset_name,
             ethereum_interface=self.ethereum_interface
         )
         crypto_mechanism.setup()
