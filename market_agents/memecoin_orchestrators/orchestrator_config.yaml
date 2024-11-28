@@ -1,63 +1,89 @@
-num_agents: 5
+num_agents: 8
 max_rounds: 2
+tool_mode: true
 agent_config:
   initial_cash: 10000.0 
-  initial_coin: 1000
-  coin_name: "DOGE" 
+  initial_asset: 1000
+  asset_name: "DOGE" 
   max_relative_spread: 0.05
   risk_aversion: 0.5
   expected_return: 0.05 
   use_llm: True
   noise_factor: 0.1   
 llm_configs:
-  - name: "gpt-4o-mini-low-temp"
-    client: "openai"
-    model: "gpt-4o-mini"
-    temperature: 0.2
-    max_tokens: 2048
-    use_cache: true
-  - name: "gpt-4o-mini-med-temp"
-    client: "openai"
-    model: "gpt-4o-mini"
-    temperature: 0.6
-    max_tokens: 4096
-    use_cache: true
-  - name: "gpt-4o-mini-high-temp"
-    client: "openai"
-    model: "gpt-4o-mini"
-    temperature: 1.0
-    max_tokens: 8192
-    use_cache: true
-  - name: "gpt-4o-low-temp"
-    client: "openai"
-    model: "gpt-4o"
-    temperature: 0.2
-    max_tokens: 4096
-    use_cache: true
-  - name: "gpt-4o-med-temp"
-    client: "openai"
-    model: "gpt-4o"
-    temperature: 0.6
-    max_tokens: 8192
-    use_cache: true
-  - name: "gpt-4o-high-temp"
-    client: "openai"
-    model: "gpt-4o"
-    temperature: 1.0
-    max_tokens: 16384
-    use_cache: true
+    - name: "hermes"
+      model: "NousResearch/Hermes-3-Llama-3.1-8B"
+      client: "litellm"
+      max_tokens: 1024
+      temperature: 0.5
+      use_cache: true
+    - name: "qwen"
+      model: "Qwen/Qwen2.5-7B-Instruct"
+      client: "litellm"
+      max_tokens: 1024
+      temperature: 0.5
+      use_cache: true
+    - name: "internlm"
+      model: "internlm/internlm2_5-7b-chat"
+      client: "litellm"
+      max_tokens: 1024
+      temperature: 0.5
+      use_cache: true
+#    - name: "mistral"
+#      model: "mistralai/Mistral-7B-Instruct-v0.3"
+#      client: "litellm"
+#      max_tokens: 1024
+#      temperature: 0.0
+#      use_cache: true
+#    - name: "llama"
+#      model: "meta-llama/Llama-3.1-8B-Instruct"
+#      client: "litellm"
+#      max_tokens: 1024
+#      temperature: 0.5
+#      use_cache: true
+#    - name: "functionary"
+#      model: "meetkai/functionary-small-v3.1"
+#      client: "litellm"
+#      max_tokens: 1024
+#      temperature: 0.5
+#      use_cache: true
+#    - name: "toolace"
+#      model: "Team-ACE/ToolACE-8B"
+#      client: "litellm"
+#      max_tokens: 1024
+#      temperature: 0.5
+#      use_cache: true
+#    - name: "minicpm"
+#      model: "openbmb/MiniCPM3-4B"
+#      client: "litellm"
+#      max_tokens: 1024
+#      temperature: 0.5
+#      use_cache: true
+#    - name: "qwq"
+#      model: "Qwen/QwQ-32B-Preview"
+#      client: "vllm"
+#      max_tokens: 1024
+#      temperature: 0.5
+#      use_cache: true
+#    - name: "gpt-4o-mini"
+#      model: "gpt-4o-mini"
+#      client: "openai"
+#      max_tokens: 2048
+#      temperature: 0.5
+#      use_cache: true
 environment_configs:
+  group_chat:
+    name: "group_chat"
+    address: "localhost:8001"
+    max_rounds: 5
+    initial_topic: "Initial Market Discussion"
+    sub_rounds: 3
+    group_size: 4
   crypto_market:
     name: "memecoin"
     address: "crypto_market_v1"
     max_rounds: 10
     coin_name: "DOGE"
-#  group_chat:
-#    name: "Stock Market Discussion"
-#    address: "group_chat"
-#    max_rounds: 5
-#    initial_topic: "Discuss the impact of recent FED rate cut of 50 bps on the stock market"
-
 environment_order:
   - crypto_market
 protocol: "ACLMessage"

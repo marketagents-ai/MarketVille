@@ -9,8 +9,8 @@ from pathlib import Path
 class AgentConfig(BaseModel):
     use_llm: bool
     initial_cash: float 
-    initial_coin: int  
-    coin_name: str
+    initial_asset: int  
+    asset_name: str
     noise_factor: float
     max_relative_spread: float
 
@@ -58,7 +58,7 @@ class OrchestratorConfig(BaseSettings):
     environment_order: List[str]
     protocol: str
     database_config: DatabaseConfig = DatabaseConfig()
-
+    tool_mode: bool
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
 def load_config(config_path: Path) -> OrchestratorConfig:
