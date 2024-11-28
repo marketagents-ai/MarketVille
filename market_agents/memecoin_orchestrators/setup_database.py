@@ -1,4 +1,4 @@
-# setup_stock_database.py
+# setup_crypto_database.py
 
 import psycopg2
 import psycopg2.extras
@@ -7,7 +7,7 @@ from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 def create_database(db_params):
     # Connect to PostgreSQL server
     conn = psycopg2.connect(
-        dbname='postgres',  # Connect to default 'postgres' database initially
+        dbname='postgres',
         user=db_params['user'],
         password=db_params['password'],
         host=db_params['host'],
@@ -71,8 +71,8 @@ def create_tables(db_params):
     CREATE TABLE IF NOT EXISTS allocations (
         id SERIAL PRIMARY KEY,
         agent_id UUID REFERENCES agents(id),
-        cash DECIMAL(15, 2) NOT NULL,
-        initial_cash DECIMAL(15, 2) NOT NULL,
+        cash NUMERIC(38, 18) NOT NULL,
+        initial_cash NUMERIC(38, 18) NOT NULL,
         positions JSONB NOT NULL,
         initial_positions JSONB NOT NULL,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -83,7 +83,7 @@ def create_tables(db_params):
     CREATE TABLE IF NOT EXISTS agent_positions (
         agent_id UUID NOT NULL,
         round INTEGER NOT NULL,
-        cash FLOAT NOT NULL,
+        cash NUMERIC(38, 18) NOT NULL,
         positions JSONB NOT NULL,
         PRIMARY KEY (agent_id, round),
         FOREIGN KEY (agent_id) REFERENCES agents(id)
@@ -95,8 +95,8 @@ def create_tables(db_params):
         id SERIAL PRIMARY KEY,
         agent_id UUID REFERENCES agents(id),
         order_type VARCHAR(10) NOT NULL CHECK (order_type IN ('buy', 'sell', 'hold')),
-        quantity INTEGER,
-        price DECIMAL(15, 2),
+        quantity NUMERIC(38, 18),
+        price NUMERIC(38, 18),
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     )
     """)
@@ -106,8 +106,8 @@ def create_tables(db_params):
         id SERIAL PRIMARY KEY,
         buyer_id UUID REFERENCES agents(id),
         seller_id UUID REFERENCES agents(id),
-        quantity INTEGER NOT NULL,
-        price DECIMAL(15, 2) NOT NULL,
+        quantity NUMERIC(38, 18) NOT NULL,
+        price NUMERIC(38, 18) NOT NULL,
         round INTEGER NOT NULL,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     )
@@ -175,6 +175,8 @@ def create_tables(db_params):
         message_id UUID PRIMARY KEY,
         agent_id UUID REFERENCES agents(id),
         round INTEGER NOT NULL,
+        sub_round INTEGER NOT NULL,
+        cohort_id TEXT NOT NULL,
         content TEXT NOT NULL,
         timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         topic TEXT
