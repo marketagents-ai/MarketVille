@@ -397,7 +397,7 @@ def main():
         for i, token_config in enumerate(config['tokens']):
             if token_symbols[i] != 'USDC':  # Skip USDC-USDC pair
                 # Calculate pool amounts based on initial price
-                base_amount = 1000
+                base_amount = 10000
                 initial_price_usd = token_config['initial_price_usd']
                 token_pool_amount = base_amount * 10**18
                 usdc_pool_amount = int(base_amount * initial_price_usd * 10**18)
