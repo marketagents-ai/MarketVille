@@ -204,7 +204,6 @@ class SimulationDataInserter:
             logging.error(f"Error inserting agent positions: {str(e)}")
             raise
 
-
     def insert_orders(self, orders: List[Dict[str, Any]], agent_id_map: Dict[str, uuid.UUID]):
         query = """
         INSERT INTO orders (agent_id, order_type, quantity, price)
