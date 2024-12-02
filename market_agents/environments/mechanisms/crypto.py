@@ -127,14 +127,14 @@ class CryptoMarketMechanism(Mechanism):
                 usdc_address
             )
             
-            self.current_price = pair_info['token0_price_in_token1']
-            # If price is 0, fall back to default
+            base_unit_price = pair_info['token0_price_in_token1']
+            self.current_price = self._convert_to_decimal_price(base_unit_price)
             if self.current_price == 0:
-                self.current_price = 0.1  # Default fallback price
+                self.current_price = 0.1
                 
         except Exception as e:
             logger.warning(f"Failed to get initial price from blockchain: {str(e)}. Using default price of 0.1")
-            self.current_price = 0.1
+            self.current_price = 0.0
             
         # Initialize price history with current price
         self.price_history = [self.current_price]
@@ -167,6 +167,10 @@ class CryptoMarketMechanism(Mechanism):
 
     def _process_actions(self, actions: Dict[str, CryptoMarketAction]) -> List[Trade]:
         trades = []
+        buy_orders = []
+        sell_orders = []
+
+        # Collect buy and sell orders
         for agent_id, action in actions.items():
             agent = self.agent_registry.get(agent_id)
             if not agent:
@@ -179,36 +183,184 @@ class CryptoMarketMechanism(Mechanism):
                 continue
 
             try:
-                # Get the economic agent which has the ethereum details
-                economic_agent = agent.economic_agent if hasattr(agent, 'economic_agent') else agent
-                
-                # Verify ethereum address exists
-                if not hasattr(economic_agent, 'ethereum_address') or not economic_agent.ethereum_address:
-                    logger.error(f"Agent {agent_id} has no ethereum_address")
-                    continue
-
-                # Log the agent's details for debugging
-                logger.debug(f"Processing action for agent {agent_id}")
-                logger.debug(f"Agent ethereum address: {economic_agent.ethereum_address}")
-                logger.debug(f"Action: {market_action}")
-
                 if market_action.order_type == OrderType.BUY:
-                    trade = self._execute_buy(economic_agent, market_action)
+                    buy_orders.append((agent_id, agent, market_action))
                 elif market_action.order_type == OrderType.SELL:
-                    trade = self._execute_sell(economic_agent, market_action)
-                else:
-                    logger.warning(f"Invalid order type from agent {agent_id}: {market_action.order_type}")
-                    continue
-
-                if trade:
-                    trades.append(trade)
-                    logger.info(f"Trade executed for agent {agent_id}: {trade}")
+                    sell_orders.append((agent_id, agent, market_action))
             except Exception as e:
                 logger.error(f"Error processing action for agent {agent_id}: {str(e)}")
-                logger.exception("Full traceback:")  # This will log the full stack trace
                 continue
 
+        buy_orders.sort(key=lambda x: x[2].price, reverse=True)
+        sell_orders.sort(key=lambda x: x[2].price)
+
+        # Match orders
+        while buy_orders and sell_orders:
+            buyer_id, buyer, buy_order = buy_orders[0]
+            seller_id, seller, sell_order = sell_orders[0]
+
+            # Check if prices match (within tolerance)
+            if buy_order.price >= sell_order.price:
+                # Calculate trade price as midpoint
+                trade_price = (buy_order.price + sell_order.price) / 2
+                
+                # Calculate trade quantity
+                trade_quantity = min(buy_order.quantity, sell_order.quantity)
+
+                # Execute the trade
+                try:
+                    # Transfer tokens between agents
+                    self._execute_p2p_trade(
+                        buyer=buyer,
+                        seller=seller,
+                        price=trade_price,
+                        quantity=trade_quantity
+                    )
+
+                    # Record the trade
+                    trade = Trade(
+                        trade_id=len(self.trades),
+                        buyer_id=buyer_id,
+                        seller_id=seller_id,
+                        price=trade_price,
+                        bid_price=buy_order.price,
+                        ask_price=sell_order.price,
+                        quantity=trade_quantity,
+                        coin=self.coin_name
+                    )
+                    trades.append(trade)
+                    logger.info(f"Matched trade: {buyer_id} buys {trade_quantity} {self.coin_name} " +
+                              f"from {seller_id} at {trade_price} USDC")
+
+                    # Update order quantities
+                    buy_order.quantity -= trade_quantity
+                    sell_order.quantity -= trade_quantity
+
+                    # Remove fulfilled orders
+                    if buy_order.quantity == 0:
+                        buy_orders.pop(0)
+                    if sell_order.quantity == 0:
+                        sell_orders.pop(0)
+
+                except Exception as e:
+                    logger.error(f"Failed to execute trade: {str(e)}")
+                    logger.exception("Full traceback:")
+                    # Remove problematic orders
+                    buy_orders.pop(0)
+                    sell_orders.pop(0)
+            else:
+                break
+
         return trades
+
+    def _execute_p2p_trade(self, buyer: CryptoEconomicAgent, seller: CryptoEconomicAgent, 
+                          price: float, quantity: int) -> None:
+        """Execute a peer-to-peer trade between two agents."""
+        # Get token addresses
+        token_address = self.ethereum_interface.get_token_address(self.coin_name)
+        usdc_address = self.ethereum_interface.get_token_address('USDC')
+        
+        # Get decimals
+        token_decimals = self.ethereum_interface.get_erc20_info(token_address)['decimals']
+        usdc_decimals = self.ethereum_interface.get_erc20_info(usdc_address)['decimals']
+        
+        # Convert amounts to proper decimals
+        usdc_amount = int(price * quantity * (10 ** usdc_decimals))
+        token_amount = int(quantity * (10 ** token_decimals))
+
+        # Verify balances
+        if not self._verify_balances(buyer, seller, usdc_amount, token_amount, usdc_address, token_address):
+            raise ValueError("Insufficient balance for trade")
+
+        # Execute the transfers
+        self._transfer_tokens(buyer, seller, usdc_amount, token_amount, usdc_address, token_address)
+
+    def _verify_balances(self, buyer: CryptoEconomicAgent, seller: CryptoEconomicAgent,
+                        usdc_amount: int, token_amount: int,
+                        usdc_address: str, token_address: str) -> bool:
+        """Verify that both parties have sufficient balances for the trade."""
+        try:
+            # Check buyer's USDC balance
+            buyer_usdc_balance = self.ethereum_interface.get_erc20_balance(
+                buyer.ethereum_address,
+                usdc_address
+            )
+            if buyer_usdc_balance < usdc_amount:
+                logger.error(f"Buyer {buyer.id} has insufficient USDC balance. " +
+                           f"Has: {buyer_usdc_balance}, Needs: {usdc_amount}")
+                return False
+
+            # Check seller's token balance
+            seller_token_balance = self.ethereum_interface.get_erc20_balance(
+                seller.ethereum_address,
+                token_address
+            )
+            if seller_token_balance < token_amount:
+                logger.error(f"Seller {seller.id} has insufficient {self.coin_name} balance. " +
+                           f"Has: {seller_token_balance}, Needs: {token_amount}")
+                return False
+
+            # Check allowances
+            buyer_usdc_allowance = self.ethereum_interface.get_erc20_allowance(
+                owner=buyer.ethereum_address,
+                spender=self.orderbook_address,
+                contract_address=usdc_address
+            )
+            if buyer_usdc_allowance < usdc_amount:
+                tx_hash = self.ethereum_interface.approve_erc20(
+                    spender=self.orderbook_address,
+                    amount=usdc_amount,
+                    contract_address=usdc_address,
+                    private_key=buyer.private_key
+                )
+                logger.info(f"Buyer {buyer.id} approved {usdc_amount} USDC. TxHash: {tx_hash}")
+
+            seller_token_allowance = self.ethereum_interface.get_erc20_allowance(
+                owner=seller.ethereum_address,
+                spender=self.orderbook_address,
+                contract_address=token_address
+            )
+            if seller_token_allowance < token_amount:
+                tx_hash = self.ethereum_interface.approve_erc20(
+                    spender=self.orderbook_address,
+                    amount=token_amount,
+                    contract_address=token_address,
+                    private_key=seller.private_key
+                )
+                logger.info(f"Seller {seller.id} approved {token_amount} {self.coin_name}. TxHash: {tx_hash}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Error verifying balances: {str(e)}")
+            return False
+
+    def _transfer_tokens(self, buyer: CryptoEconomicAgent, seller: CryptoEconomicAgent,
+                        usdc_amount: int, token_amount: int,
+                        usdc_address: str, token_address: str) -> None:
+        """Execute the token transfers between buyer and seller."""
+        try:
+            # Transfer USDC from buyer to seller
+            tx_hash = self.ethereum_interface.transfer_erc20(
+                to_address=seller.ethereum_address,
+                amount=usdc_amount,
+                contract_address=usdc_address,
+                private_key=buyer.private_key
+            )
+            logger.info(f"USDC transfer complete. TxHash: {tx_hash}")
+
+            # Transfer tokens from seller to buyer
+            tx_hash = self.ethereum_interface.transfer_erc20(
+                to_address=buyer.ethereum_address,
+                amount=token_amount,
+                contract_address=token_address,
+                private_key=seller.private_key
+            )
+            logger.info(f"Token transfer complete. TxHash: {tx_hash}")
+
+        except Exception as e:
+            logger.error(f"Error executing transfers: {str(e)}")
+            raise
 
     def _execute_buy(self, agent: CryptoEconomicAgent, market_action: MarketAction) -> Optional[Trade]:
         """Agent buys tokens using USDC."""
@@ -261,7 +413,7 @@ class CryptoMarketMechanism(Mechanism):
         return Trade(
             trade_id=len(self.trades),
             buyer_id=agent.id,
-            seller_id="Orderbook",
+            seller_id="MARKET_MAKER",
             price=market_action.price,
             bid_price=market_action.price,
             ask_price=market_action.price,
@@ -339,7 +491,7 @@ class CryptoMarketMechanism(Mechanism):
             eth_balance = self.ethereum_interface.get_eth_balance(agent.ethereum_address)
             token_balance = self.ethereum_interface.get_erc20_balance(
                 agent.ethereum_address,
-                self.token_addresses[0]
+                self.token_addresses['USDC']
             )
 
             # Calculate portfolio value
@@ -361,6 +513,12 @@ class CryptoMarketMechanism(Mechanism):
             )
 
         return observations
+    
+    def _convert_to_decimal_price(self, base_unit_price: int, decimals: int = 18) -> float:
+        return base_unit_price / (10 ** decimals)
+
+    def _convert_to_base_units(self, decimal_price: float, decimals: int = 18) -> int:
+        return int(decimal_price * (10 ** decimals))
 
     def _create_market_summary(self, trades: List[Trade]) -> MarketSummary:
         if not trades:
