@@ -341,7 +341,7 @@ class CryptoMarketMechanism(Mechanism):
         """Execute the token transfers between buyer and seller."""
         try:
             # Transfer USDC from buyer to seller
-            tx_hash = self.ethereum_interface.transfer_erc20(
+            tx_hash = self.ethereum_interface.send_erc20(
                 to_address=seller.ethereum_address,
                 amount=usdc_amount,
                 contract_address=usdc_address,
@@ -350,7 +350,7 @@ class CryptoMarketMechanism(Mechanism):
             logger.info(f"USDC transfer complete. TxHash: {tx_hash}")
 
             # Transfer tokens from seller to buyer
-            tx_hash = self.ethereum_interface.transfer_erc20(
+            tx_hash = self.ethereum_interface.send_erc20(
                 to_address=buyer.ethereum_address,
                 amount=token_amount,
                 contract_address=token_address,
