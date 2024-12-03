@@ -57,9 +57,9 @@ class OrderType(str, Enum):
 
 
 class MarketAction(BaseModel):
-    order_type: OrderType = Field(..., description="Type of order: 'buy', 'sell', or 'hold'")
-    price: Optional[float] = Field(None, description="Price of the order (not applicable for 'hold')")
-    quantity: Optional[int] = Field(None, ge=0, description="Quantity of the order (not applicable for 'hold')")
+    order_type: OrderType = Field(default=OrderType.HOLD, description="Type of order: 'buy', 'sell', or 'hold'")
+    price: float = Field(default=None, description="Price of the order (not applicable for 'hold')")
+    quantity: int = Field(default=None, ge=0, description="Quantity of the order (not applicable for 'hold')")
 
     @model_validator(mode='after')
     def validate_order_type_and_fields(self):
