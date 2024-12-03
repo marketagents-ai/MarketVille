@@ -11,15 +11,14 @@ is_compiled = False
 
 def compile_contract(contract_path, abi_name):
     global is_compiled
-    """Compile the ERC20 contract using Hardhat"""
-    # Run hardhat compile from hardhat-testnet directory
+    """Compile the contract using Hardhat"""
     os.chdir('hardhat-testnet')
 
     if not is_compiled:    
+        subprocess.run(['npx', 'hardhat', 'clean'], check=True)
         subprocess.run(['npx', 'hardhat', 'compile'], check=True)
         is_compiled = True
     
-    # Get the compiled contract artifact
     artifact_path = os.path.join(
         'artifacts/contracts',
         os.path.basename(contract_path),
@@ -160,21 +159,25 @@ class OrderBookTestDeployer:
         tx_hash = self.w3.eth.send_transaction(tx)
         return self.w3.eth.wait_for_transaction_receipt(tx_hash)
     
-    def deposit(self, contract, token_address, amount, from_address=None):
-        """Deposit tokens into the OrderBook"""
+    def deposit(self, contract, tokenA_address, tokenB_address, amountA, amountB, from_address=None):
         if from_address is None:
             from_address = self.account_address
-            
-        # Remove the withdrawal check and just deposit
-        tx = contract.functions.deposit(token_address, amount).build_transaction({
+
+        tx = contract.functions.deposit(
+            tokenA_address,
+            tokenB_address,
+            amountA,
+            amountB
+        ).build_transaction({
             'from': from_address,
             'nonce': self.w3.eth.get_transaction_count(from_address),
-            'gas': 200000,
+            'gas': 300000,
             'gasPrice': self.w3.eth.gas_price
         })
-        
+
         tx_hash = self.w3.eth.send_transaction(tx)
         return self.w3.eth.wait_for_transaction_receipt(tx_hash)
+
 
     def withdraw(self, contract, token_address, from_address=None):
         """Withdraw tokens from the OrderBook"""
@@ -366,75 +369,98 @@ def main():
         # Deploy tokens from configuration
         print("\nDeploying tokens from configuration...")
         tokens = []
-        token_addresses = []
-        token_symbols = []
-        
+        tokens_data = [] 
+
         # Compile ERC20 contract once
         erc20_interface = erc20_deployer.compile_contract("contracts/MinimalERC20.sol")
-        
+
         # Deploy each token
         for token_config in config['tokens']:
             symbol = token_config['symbol']
             name = token_config['name']
-            initial_supply = token_config['initial_supply'] * 10**18  # Convert to wei
-            
+            initial_supply = token_config['initial_supply'] * 10**18
+            initial_price_usd = token_config['initial_price_usd']
+
             # Deploy token
             address = erc20_deployer.deploy_contract(erc20_interface, name, symbol)
             contract = erc20_deployer.get_contract(address, erc20_interface)
             tokens.append(contract)
-            token_addresses.append(address)
-            token_symbols.append(symbol)
+            tokens_data.append({
+                'symbol': symbol,
+                'address': address,
+                'name': name,
+                'initial_supply': initial_supply,
+                'initial_price_usd': initial_price_usd,
+                'contract': contract
+            })
             print(f"Deployed {symbol} at: {address}")
-            
+
             # Mint initial supply to account[0]
             erc20_deployer.mint_tokens(contract, erc20_deployer.account_address, initial_supply)
             print(f"Minted {initial_supply // 10**18} {symbol} to {erc20_deployer.account_address}")
 
+        # Output deployed tokens for verification
+        print("\nDeployed tokens:")
+        for token in tokens_data:
+            print(f"Symbol: {token['symbol']}, Address: {token['address']}")
+
         # Create pools with initial prices
         print("\nCreating liquidity pools...")
-        usdc_index = token_symbols.index('USDC')
-        
-        for i, token_config in enumerate(config['tokens']):
-            if token_symbols[i] != 'USDC':  # Skip USDC-USDC pair
+        # Find USDC in tokens_data
+        usdc_token = next((token for token in tokens_data if token['symbol'] == 'USDC'), None)
+        if usdc_token is None:
+            raise Exception("USDC token not found in deployment data.")
+
+        usdc_contract = usdc_token['contract']
+        usdc_address = usdc_token['address']
+
+        for token in tokens_data:
+            if token['symbol'] != 'USDC': 
                 # Calculate pool amounts based on initial price
                 base_amount = 10000
-                initial_price_usd = token_config['initial_price_usd']
+                initial_price_usd = token['initial_price_usd']
                 token_pool_amount = base_amount * 10**18
                 usdc_pool_amount = int(base_amount * initial_price_usd * 10**18)
-                
-                print(f"\nCreating pool for {token_symbols[i]}-USDC")
+
+                print(f"\nCreating pool for {token['symbol']}-USDC")
                 print(f"Initial price: ${initial_price_usd}")
-                
-                # Approve tokens
-                orderbook_deployer.approve_token(tokens[i], orderbook_address, token_pool_amount)
-                orderbook_deployer.approve_token(tokens[usdc_index], orderbook_address, usdc_pool_amount)
-                
+
+                # Approve tokens from account[0]
+                orderbook_deployer.approve_token(token['contract'], orderbook_address, token_pool_amount)
+                orderbook_deployer.approve_token(usdc_contract, orderbook_address, usdc_pool_amount)
+
                 try:
-                    # Deposit tokens to create pool
-                    orderbook_deployer.deposit(orderbook, token_addresses[i], token_pool_amount)
-                    orderbook_deployer.deposit(orderbook, token_addresses[usdc_index], usdc_pool_amount)
-                    
+                    # Deposit tokens to create pool using the updated deposit function
+                    orderbook_deployer.deposit(
+                        orderbook,
+                        token['address'],
+                        usdc_address,
+                        token_pool_amount,
+                        usdc_pool_amount
+                    )
+
                     # Verify pool creation
-                    price = orderbook_deployer.get_price(orderbook, token_addresses[i], token_addresses[usdc_index])
-                    print(f"Pool created! Current price {token_symbols[i]}/USDC: {price / 10**18}")
-                    
+                    price = orderbook_deployer.get_price(orderbook, token['address'], usdc_address)
+                    print(f"Pool created! Current price {token['symbol']}/USDC: {price / 10**18}")
+
                 except Exception as e:
-                    print(f"Error creating pool {token_symbols[i]}-USDC: {str(e)}")
+                    print(f"Error creating pool {token['symbol']}-USDC: {str(e)}")
                     continue
+
 
         # Save deployment data
         data = {
             "orderbook_address": orderbook_address,
             "orderbook_abi": orderbook_interface['abi'],
             "token_addresses": {
-                symbol: address
-                for symbol, address in zip(token_symbols, token_addresses)
+                token['symbol']: token['address']
+                for token in tokens_data
             },
-            "token_symbols": token_symbols,
+            "token_symbols": [token['symbol'] for token in tokens_data],
             "token_abi": erc20_interface['abi'],
             "initial_prices": {
-                symbol: config['tokens'][i]['initial_price_usd']
-                for i, symbol in enumerate(token_symbols)
+                token['symbol']: token['initial_price_usd']
+                for token in tokens_data
             }
         }
 
@@ -447,5 +473,8 @@ def main():
         print(f"Error: {str(e)}")
         raise e
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
+
+
+

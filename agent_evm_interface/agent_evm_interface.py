@@ -32,12 +32,11 @@ class EthereumInterface:
 
         self.token_address_by_symbol = self.testnet_data['token_addresses']
         self.token_symbols = self.testnet_data['token_symbols']
-
         self.token_addresses = [self.token_address_by_symbol[symbol] for symbol in self.token_symbols]
         self.token_symbol_by_address = {
             address: symbol for symbol, address in self.token_address_by_symbol.items()
         }
-        
+
         # TODO: maybe find a better way to do this:
         Account.enable_unaudited_hdwallet_features()
 
