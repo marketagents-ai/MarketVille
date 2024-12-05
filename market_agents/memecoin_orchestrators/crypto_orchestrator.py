@@ -350,57 +350,58 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
             self.logger.error(f"Unexpected global observation type: {type(global_observation)}")
             return
 
-        # Get current market prices from EVM
-        current_prices = {}
-        for symbol, token_address in self.token_addresses.items():
+        # Adjust if your main pair is different.
+        main_symbol = "DOGE"
+        main_token_address = self.doge_token_address
+
+        try:
+            # Attempt to get pair info for DOGE/USDC only
             pair_info = self.ethereum_interface.get_pair_info(
-                token_address,
+                main_token_address,
                 self.quote_token_address
             )
-            current_prices[token_address] = pair_info['token0_price_in_token1']
+            current_price = pair_info['token0_price_in_token1']
+        except Exception as e:
+            self.logger.warning(f"Could not get pair info for {main_symbol}-USDC due to insufficient liquidity: {e}")
+            current_price = 0
 
         # Track trades and calculate rewards
         agent_rewards = {}
-        self.logger.info(f"Processing {len(global_observation.all_trades)} trades")
-        
-        log_section(self.logger, "TRADES")
-        for trade in global_observation.all_trades:
+        all_trades = global_observation.all_trades
+        self.logger.info(f"Processing {len(all_trades)} trades")
+
+
+        for trade in all_trades:
             try:
-                # Find the buyer agent
+                # This code remains the same, processing trades using the known current_price
                 buyer = next(agent for agent in self.agents if agent.id == trade.buyer_id)
-                
-                # Handle seller - could be orderbook or another agent
                 seller = None
                 if trade.seller_id != 'Orderbook':
                     seller = next(agent for agent in self.agents if agent.id == trade.seller_id)
-                
-                # Get current market price for reward calculation
-                current_price = current_prices[trade.token_address]
-                
-                # Process the trade for buyer
+
+                # Use current_price as fallback if pair_info is not available
+                price_for_reward = current_price if current_price != 0 else 1e18  # fallback price if needed
                 buyer.economic_agent.process_trade(trade)
-                buyer_reward = buyer.economic_agent.calculate_trade_reward(trade, current_price)
+                buyer_reward = buyer.economic_agent.calculate_trade_reward(trade, price_for_reward)
                 agent_rewards[buyer.id] = agent_rewards.get(buyer.id, 0) + buyer_reward
-                
-                # Process the trade for seller (if it's an agent)
+
                 if seller:
                     seller.economic_agent.process_trade(trade)
-                    seller_reward = seller.economic_agent.calculate_trade_reward(trade, current_price)
+                    seller_reward = seller.economic_agent.calculate_trade_reward(trade, price_for_reward)
                     agent_rewards[seller.id] = agent_rewards.get(seller.id, 0) + seller_reward
-                
-                # Update agent balances from EVM
+
                 self.update_agent_balances(buyer.economic_agent)
                 if seller:
                     self.update_agent_balances(seller.economic_agent)
-                
+
                 self.tracker.add_trade(trade)
-                
-                self.logger.info(f"Processed trade: {trade.buyer_id} bought {trade.quantity} {trade.coin} " +
-                            f"from {trade.seller_id} at {trade.price} USDC")
-                
-            except Exception as e:
-                self.logger.error(f"Error processing trade: {str(e)}")
+                self.logger.info(f"Processed trade: {trade.buyer_id} bought {trade.quantity} {trade.coin} "
+                                f"from {trade.seller_id} at {trade.price} USDC")
+
+            except Exception as ex:
+                self.logger.error(f"Error processing trade {trade}: {str(ex)}")
                 self.logger.exception("Exception details:")
+
 
     def update_agent_balances(self, agent: CryptoEconomicAgent):
         """Update agent balances from EVM"""
@@ -460,6 +461,7 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
             await self.process_round_results(round_num)
         # Print simulation summary after all rounds
         self.print_summary()
+
 
     def print_summary(self):
         log_section(self.logger, "CRYPTO MARKET SIMULATION SUMMARY")
