@@ -335,29 +335,25 @@ class CryptoMarketMechanism(Mechanism):
             logger.error(f"Error verifying balances: {str(e)}")
             return False
 
-    def _transfer_tokens(self, buyer: CryptoEconomicAgent, seller: CryptoEconomicAgent,
-                        usdc_amount: int, token_amount: int,
-                        usdc_address: str, token_address: str) -> None:
-        """Execute the token transfers between buyer and seller."""
+    def _transfer_tokens(self, buyer, seller, usdc_amount, token_amount, usdc_address, token_address):
         try:
             # Transfer USDC from buyer to seller
             tx_hash = self.ethereum_interface.send_erc20(
-                to_address=seller.ethereum_address,
+                to=seller.ethereum_address,
                 amount=usdc_amount,
                 contract_address=usdc_address,
                 private_key=buyer.private_key
             )
-            logger.info(f"USDC transfer complete. TxHash: {tx_hash}")
+            logger.info(f"USDC transfer tx hash: {tx_hash}")
 
             # Transfer tokens from seller to buyer
             tx_hash = self.ethereum_interface.send_erc20(
-                to_address=buyer.ethereum_address,
+                to=buyer.ethereum_address,
                 amount=token_amount,
                 contract_address=token_address,
                 private_key=seller.private_key
             )
-            logger.info(f"Token transfer complete. TxHash: {tx_hash}")
-
+            logger.info(f"Token transfer tx hash: {tx_hash}")
         except Exception as e:
             logger.error(f"Error executing transfers: {str(e)}")
             raise
