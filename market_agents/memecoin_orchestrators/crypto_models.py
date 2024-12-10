@@ -58,19 +58,20 @@ class OrderType(str, Enum):
 
 class MarketAction(BaseModel):
     order_type: OrderType = Field(default=OrderType.HOLD, description="Type of order: 'buy', 'sell', or 'hold'")
-    price: float = Field(default=None, description="Price of the order (not applicable for 'hold')")
-    quantity: int = Field(default=None, ge=0, description="Quantity of the order (not applicable for 'hold')")
+    token: Optional[str] = Field(default=None, description="Token symbol to trade")
+    price: Optional[float] = Field(default=None, description="Price of the order (not applicable for 'hold')")
+    quantity: Optional[int] = Field(default=None, ge=0, description="Quantity of the order (not applicable for 'hold')")
 
     @model_validator(mode='after')
-    def validate_order_type_and_fields(self):
+    def validate_order_type_and_fields(self):        
         if self.order_type == OrderType.HOLD:
-            if self.price is not None or self.quantity is not None:
-                raise ValueError("Price and quantity must be None for 'hold' orders")
+            if self.price is not None or self.quantity is not None or self.token is not None:
+                raise ValueError("Hold orders should not specify price, quantity, or token")
         else:
-            if self.price is None or self.quantity is None:
-                raise ValueError("Price and quantity must be specified for 'buy' and 'sell' orders")
+            if None in (self.price, self.quantity, self.token):
+                raise ValueError(f"Buy and sell orders must specify price, quantity, and token. Got: price={self.price}, quantity={self.quantity}, token={self.token}")
             if self.price <= 0 or self.quantity <= 0:
-                raise ValueError("Price and quantity must be positive for 'buy' and 'sell' orders")
+                raise ValueError("Price and quantity must be positive for buy and sell orders")
         return self
 
 
@@ -92,6 +93,8 @@ class Trade(BaseModel):
     ask_price: float = Field(ge=0, description="The ask price")
     quantity: int = Field(default=1, description="The quantity traded")
     coin: str = Field(default="DOGE", description="The symbol of the coin traded")
+    action_type: OrderType
+    tx_hash: Optional[str] = Field(default=None, description="Transaction hash from the blockchain")
     timestamp: datetime = Field(default_factory=datetime.now, description="Timestamp of the trade")
 
     @model_validator(mode='after')
