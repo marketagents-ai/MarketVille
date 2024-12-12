@@ -1,34 +1,43 @@
-num_agents: 8
+num_agents: 20
 max_rounds: 2
 tool_mode: true
 agent_config:
-  initial_cash: 10000.0 
-  initial_asset: 1000
-  asset_name: "DOGE" 
+  initial_allocations:
+    - token: "DOGE"
+      quantity: 1000
+#    - token: "GOAT" 
+#      quantity: 500
+  tokens: ["DOGE"]
   max_relative_spread: 0.05
   risk_aversion: 0.5
   expected_return: 0.05 
-  use_llm: True
+  use_llm: true
   noise_factor: 0.1   
 llm_configs:
-    - name: "hermes"
-      model: "NousResearch/Hermes-3-Llama-3.1-8B"
-      client: "litellm"
-      max_tokens: 1024
+    - name: "gpt-4o-mini"
+      model: "gpt-4o-mini"
+      client: "openai"
+      max_tokens: 2048
       temperature: 0.5
       use_cache: true
-    - name: "qwen"
-      model: "Qwen/Qwen2.5-7B-Instruct"
-      client: "litellm"
-      max_tokens: 1024
-      temperature: 0.5
-      use_cache: true
-    - name: "internlm"
-      model: "internlm/internlm2_5-7b-chat"
-      client: "litellm"
-      max_tokens: 1024
-      temperature: 0.5
-      use_cache: true
+#    - name: "hermes"
+#      model: "NousResearch/Hermes-3-Llama-3.2-3B"
+#      client: "vllm"
+#      max_tokens: 1024
+#      temperature: 0.5
+#      use_cache: true
+#    - name: "qwen"
+#      model: "Qwen/Qwen2.5-7B-Instruct"
+#      client: "litellm"
+#      max_tokens: 1024
+#      temperature: 0.5
+#      use_cache: true
+#    - name: "internlm"
+#      model: "internlm/internlm2_5-7b-chat"
+#      client: "litellm"
+#      max_tokens: 1024
+#      temperature: 0.5
+#      use_cache: true
 #    - name: "mistral"
 #      model: "mistralai/Mistral-7B-Instruct-v0.3"
 #      client: "litellm"
@@ -65,12 +74,7 @@ llm_configs:
 #      max_tokens: 1024
 #      temperature: 0.5
 #      use_cache: true
-#    - name: "gpt-4o-mini"
-#      model: "gpt-4o-mini"
-#      client: "openai"
-#      max_tokens: 2048
-#      temperature: 0.5
-#      use_cache: true
+
 environment_configs:
   group_chat:
     name: "group_chat"

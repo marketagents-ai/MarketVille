@@ -8,11 +8,12 @@ from pathlib import Path
 
 class AgentConfig(BaseModel):
     use_llm: bool
-    initial_cash: float 
-    initial_asset: int  
-    asset_name: str
-    noise_factor: float
     max_relative_spread: float
+    risk_aversion: float = Field(default=0.5)
+    expected_return: float = Field(default=0.05)
+    noise_factor: float
+    initial_allocations: List[Dict[str, Union[str, int]]]
+    tokens: List[str] = Field(default_factory=list)
 
 class CryptoConfig(BaseModel):
     name: str
