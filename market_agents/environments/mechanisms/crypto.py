@@ -190,14 +190,23 @@ class CryptoMarketMechanism(Mechanism):
                 self.price_histories[token] = [0.1]
 
     def step(self, action: GlobalCryptoMarketAction) -> EnvironmentStep:
+        """Execute one step in the mechanism"""
         self.current_round += 1
 
-        # Process actions (buy/sell/hold) using the EthereumInterface
+        # Process actions and collect new trades
         new_trades = self._process_actions(action.actions)
-        self.trades.extend(new_trades)
-
+        
+        # Update prices based on new trades
+        self._update_price(new_trades)
+        
+        # Create market summary and observations
         market_summary = self._create_market_summary(new_trades)
         observations = self._create_observations(market_summary)
+        
+        # Store trades in mechanism history
+        self.trades.extend(new_trades)
+
+        # Check if simulation is done
         done = self.current_round >= self.max_rounds
 
         return EnvironmentStep(
@@ -209,7 +218,10 @@ class CryptoMarketMechanism(Mechanism):
                 price_histories=self.price_histories.copy()
             ),
             done=done,
-            info={"current_round": self.current_round}
+            current_round=self.current_round,  # Pass the current round
+            info={
+                "market_prices": self.current_prices
+            }
         )
     
     def _process_actions(self, actions: Dict[str, MarketAction]) -> List[Trade]:
