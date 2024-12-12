@@ -8,11 +8,12 @@ from pathlib import Path
 
 class AgentConfig(BaseModel):
     use_llm: bool
-    initial_cash: float 
-    initial_coin: int  
-    coin_name: str
-    noise_factor: float
     max_relative_spread: float
+    risk_aversion: float = Field(default=0.5)
+    expected_return: float = Field(default=0.05)
+    noise_factor: float
+    initial_allocations: List[Dict[str, Union[str, int]]]
+    tokens: List[str] = Field(default_factory=list)
 
 class CryptoConfig(BaseModel):
     name: str
@@ -58,7 +59,7 @@ class OrchestratorConfig(BaseSettings):
     environment_order: List[str]
     protocol: str
     database_config: DatabaseConfig = DatabaseConfig()
-
+    tool_mode: bool
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
 def load_config(config_path: Path) -> OrchestratorConfig:

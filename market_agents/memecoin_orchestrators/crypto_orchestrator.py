@@ -23,8 +23,7 @@ from market_agents.memecoin_orchestrators.crypto_models import (
     Trade,
     OrderType
 )
-from market_agents.inference.message_models import LLMOutput
-from market_agents.agents.protocols.acl_message import ACLMessage
+
 from market_agents.memecoin_orchestrators.config import CryptoConfig, OrchestratorConfig
 from market_agents.memecoin_orchestrators.logger_utils import (
     log_section,
@@ -41,26 +40,62 @@ from agent_evm_interface.agent_evm_interface import EthereumInterface
 # Define CryptoTracker for tracking crypto market-specific data
 class CryptoTracker:
     def __init__(self):
-        self.all_trades: List[Trade] = []
-        self.price_history: List[float] = []
+        self.trades: List[Trade] = []
         self.agent_portfolios: Dict[str, float] = {}
+        self.price_history: Dict[str, List[float]] = {}
+        self.volume_history: Dict[str, List[float]] = {}
+        
+    def add_trade(self, trade: Trade, round_num: int):
+        """Add a trade to the tracker"""
+        self.trades.append(trade)
+        
+        # Update volume history
+        if trade.coin not in self.volume_history:
+            self.volume_history[trade.coin] = []
+        self.volume_history[trade.coin].append(trade.quantity * trade.price)
 
-    def add_trade(self, trade: Trade):
-        self.all_trades.append(trade)
+    def update_price_history(self, price: float, token: str):
+        """Update price history for a specific token"""
+        if token not in self.price_history:
+            self.price_history[token] = []
+        self.price_history[token].append(price)
 
-    def update_price_history(self, price: float):
-        self.price_history.append(price)
-
-    def update_agent_portfolio(self, agent_id: str, portfolio_value: float):
-        self.agent_portfolios[agent_id] = portfolio_value
-
-    def get_summary(self):
-        return {
-            "total_trades": len(self.all_trades),
-            "price_history": self.price_history,
-            "agent_portfolios": self.agent_portfolios
+    def get_summary(self) -> dict:
+        """Get summary statistics"""
+        summary = {
+            'total_trades': len(self.trades),
+            'total_volume': sum(
+                trade.quantity * trade.price 
+                for trade in self.trades
+            ) if self.trades else 0,
+            'price_history': self.price_history,
+            'volume_history': self.volume_history
         }
+        return summary
 
+    def get_trades_data(self) -> List[Dict]:
+        """Get trades data in format suitable for database insertion"""
+        return [
+            {
+                'buyer_id': str(trade.buyer_id),
+                'seller_id': str(trade.seller_id),
+                'quantity': float(trade.quantity),
+                'price': float(trade.price),
+                'coin': trade.coin,
+                'round': getattr(trade, 'round', 0),  # Default to 0 if round not set
+                'timestamp': getattr(trade, 'timestamp', datetime.now()),
+                'tx_hash': getattr(trade, 'tx_hash', None)
+            }
+            for trade in self.trades
+        ]
+
+    def add_round_data(self, volume: float, prices: Dict[str, float]):
+        """Add data for a single round"""
+        for token, price in prices.items():
+            self.update_price_history(price, token)
+            if token not in self.volume_history:
+                self.volume_history[token] = []
+            self.volume_history[token].append(volume)
 # Implement the CryptoOrchestrator class
 class CryptoOrchestrator(BaseEnvironmentOrchestrator):
     def __init__(
@@ -84,7 +119,7 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
         self.environment = None
         self.tracker = CryptoTracker()
         self.agent_rewards: Dict[str, float] = {}
-        self.cognitive_processor = AgentCognitiveProcessor(ai_utils, data_inserter, logger)
+        self.cognitive_processor = AgentCognitiveProcessor(ai_utils, data_inserter, logger, tool_mode=self.orchestrator_config.tool_mode)
 
         # Initialize EthereumInterface
         self.ethereum_interface = EthereumInterface()
@@ -93,12 +128,18 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
         self.minter_private_key = self.minter_account['private_key']
         self.token_addresses = self.ethereum_interface.testnet_data['token_addresses']
         try:
+            # Get quote token (USDC) address
             self.quote_token_address = self.ethereum_interface.get_token_address('USDC')
-            self.doge_token_address = self.ethereum_interface.get_token_address('DOGE')
-            self.orderbook_address = self.ethereum_interface.testnet_data['orderbook_address']
-            
             self.logger.info(f"USDC address: {self.quote_token_address}")
-            self.logger.info(f"DOGE address: {self.doge_token_address}")
+            
+            # Get addresses for all configured trading tokens
+            self.trading_token_addresses = {}
+            for token in self.orchestrator_config.agent_config.tokens:
+                token_address = self.ethereum_interface.get_token_address(token)
+                self.trading_token_addresses[token] = token_address
+                self.logger.info(f"{token} address: {token_address}")
+            
+            self.orderbook_address = self.ethereum_interface.testnet_data['orderbook_address']
         except (ValueError, KeyError) as e:
             self.logger.error(f"Error getting token addresses: {str(e)}")
             raise
@@ -107,40 +148,116 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
         """Sets up the crypto market environment and assigns it to agents"""
         log_section(self.logger, "CONFIGURING CRYPTO MARKET ENVIRONMENT")
 
-        INITIAL_DOGE_AMOUNT = 1000 
-        INITIAL_USDC_AMOUNT = 10000
-        INITIAL_ETH_AMOUNT = 1000000000000000000
-        for agent in self.agents:
-            # Mint DOGE to agent's address
-            tx_hash = self.ethereum_interface.mint_erc20(
-                to=agent.economic_agent.ethereum_address,
-                amount=INITIAL_DOGE_AMOUNT,
-                contract_address=self.doge_token_address,
-                minter_private_key=self.minter_private_key
-            )
-            self.logger.info(f"Minted DOGE to agent {agent.id}. TxHash: {tx_hash}")
+        # Get token info for all supported tokens
+        token_info = {}
+        token_decimals = {}
+        token_addresses = {}
 
-            # Mint USDC to agent's address
+        # Get USDC info first as it's the quote token
+        usdc_info = self.ethereum_interface.get_erc20_info(self.quote_token_address)
+        token_info['USDC'] = usdc_info
+        token_decimals['USDC'] = usdc_info['decimals']
+        token_addresses['USDC'] = self.quote_token_address
+
+        # Get info for all trading tokens from config
+        supported_tokens = self.orchestrator_config.agent_config.tokens
+        for token in supported_tokens:
+            token_address = self.ethereum_interface.get_token_address(token)
+            token_addresses[token] = token_address
+            token_info[token] = self.ethereum_interface.get_erc20_info(token_address)
+            token_decimals[token] = token_info[token]['decimals']
+
+        # Define readable amounts for all tokens
+        READABLE_AMOUNTS = {
+            'USDC': 10_000,  # Initial USDC allocation
+            'ETH': 0.1,      # Initial ETH for gas
+        }
+
+        # Add initial amounts for trading tokens from config
+        for allocation in self.orchestrator_config.agent_config.initial_allocations:
+            READABLE_AMOUNTS[allocation['token']] = allocation['quantity']
+
+        # Convert to raw amounts with proper decimals
+        INITIAL_AMOUNTS = {
+            'USDC': int(READABLE_AMOUNTS['USDC'] * (10 ** token_decimals['USDC'])),
+            'ETH': int(READABLE_AMOUNTS['ETH'] * (10 ** 18))
+        }
+        
+        # Add raw amounts for trading tokens
+        for token in supported_tokens:
+            if token in READABLE_AMOUNTS:
+                INITIAL_AMOUNTS[token] = int(READABLE_AMOUNTS[token] * (10 ** token_decimals[token]))
+
+        for agent in self.agents:
+            # Mint USDC (quote token)
             tx_hash = self.ethereum_interface.mint_erc20(
                 to=agent.economic_agent.ethereum_address,
-                amount=INITIAL_USDC_AMOUNT,
+                amount=INITIAL_AMOUNTS['USDC'],
                 contract_address=self.quote_token_address,
                 minter_private_key=self.minter_private_key
             )
-            self.logger.info(f"Minted USDC to agent {agent.id}. TxHash: {tx_hash}")
+            self.logger.info(f"Minted {READABLE_AMOUNTS['USDC']} USDC to agent {agent.id}. TxHash: {tx_hash}")
 
-            # Send ETH to agent's address for gas fees
+            # Mint trading tokens
+            for token in supported_tokens:
+                tx_hash = self.ethereum_interface.mint_erc20(
+                    to=agent.economic_agent.ethereum_address,
+                    amount=INITIAL_AMOUNTS[token],
+                    contract_address=token_addresses[token],
+                    minter_private_key=self.minter_private_key
+                )
+                self.logger.info(f"Minted {READABLE_AMOUNTS[token]} {token} to agent {agent.id}. TxHash: {tx_hash}")
+
+            # Send ETH for gas
             tx_hash = self.ethereum_interface.send_eth(
                 to=agent.economic_agent.ethereum_address,
-                amount=INITIAL_ETH_AMOUNT,
+                amount=INITIAL_AMOUNTS['ETH'],
                 private_key=self.minter_private_key
             )
-            self.logger.info(f"Sent ETH to agent {agent.id}. TxHash: {tx_hash}")
+            self.logger.info(f"Sent {READABLE_AMOUNTS['ETH']} ETH to agent {agent.id}. TxHash: {tx_hash}")
 
-        # Create the crypto market mechanism
+            # Log initial balances
+            balance_info = []
+            
+            # USDC balance
+            usdc_balance = self.ethereum_interface.get_erc20_balance(
+                agent.economic_agent.ethereum_address,
+                self.quote_token_address
+            ) / (10 ** token_decimals['USDC'])
+            balance_info.append(f"- USDC: {usdc_balance:.2f}")
+
+            # Trading token balances
+            for token in supported_tokens:
+                token_balance = self.ethereum_interface.get_erc20_balance(
+                    agent.economic_agent.ethereum_address,
+                    token_addresses[token]
+                ) / (10 ** token_decimals[token])
+                balance_info.append(f"- {token}: {token_balance:.2f}")
+
+            # ETH balance
+            eth_balance = self.ethereum_interface.get_eth_balance(
+                agent.economic_agent.ethereum_address
+            ) / (10 ** 18)
+            balance_info.append(f"- ETH: {eth_balance:.4f}")
+
+            # Log all balances
+            self.logger.info(f"""
+                Initial balances for agent {agent.id}:
+                {chr(10).join(balance_info)}
+            """)
+
+            # Initialize portfolio positions for all tokens
+            for token in supported_tokens:
+                agent.economic_agent.endowment.initial_portfolio.update_crypto(
+                    symbol=token,
+                    quantity=READABLE_AMOUNTS[token],
+                    purchase_price=1.0  # Initial reference price
+                )
+
+        # Create the crypto market mechanism with multiple tokens
         crypto_mechanism = CryptoMarketMechanism(
             max_rounds=self.config.max_rounds,
-            coin=self.orchestrator_config.agent_config.coin_name,
+            tokens=supported_tokens,  # Pass all supported tokens from config
             ethereum_interface=self.ethereum_interface
         )
         crypto_mechanism.setup()
@@ -189,15 +306,13 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
         for agent in self.agents:
             agent.economic_agent.reset_pending_orders()
 
-        # Set system messages for agents
-        self.set_agent_system_messages(round_num, env.mechanism.coin_name)
+        # Set system messages for agents with multi-token support
+        self.set_agent_system_messages(round_num)
 
         log_section(self.logger, "AGENT PERCEPTIONS")
-        # Run agents' perception in parallel
         await self.cognitive_processor.run_parallel_perceive(self.agents, self.environment_name)
 
         log_section(self.logger, "AGENT ACTIONS")
-        # Run agents' action generation in parallel
         actions = await self.cognitive_processor.run_parallel_action(self.agents, self.environment_name)
 
         actions_map = {action.source_id: action for action in actions}
@@ -213,20 +328,23 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
                     order_type = action_content.get('order_type')
                     if order_type in [OrderType.BUY.value, OrderType.SELL.value, OrderType.HOLD.value]:
                         if order_type != OrderType.HOLD.value:
+                            token = action_content.get('token')
+                            if token not in env.mechanism.tokens:
+                                raise ValueError(f"Invalid token: {token}")
                             price = action_content.get('price')
                             quantity = action_content.get('quantity')
                             if price is not None and quantity is not None:
                                 market_action = MarketAction(
                                     order_type=OrderType(order_type),
+                                    token=token,
                                     price=price,
                                     quantity=quantity
                                 )
                             else:
-                                raise ValueError(f"Price and quantity must be specified for 'buy' and 'sell' orders")
+                                raise ValueError("Price and quantity must be specified for 'buy' and 'sell' orders")
                         else:
                             market_action = MarketAction(order_type=OrderType.HOLD)
                         agent_actions[agent.id] = CryptoMarketAction(agent_id=agent.id, action=market_action)
-                        # Update agent's pending orders
                         agent.economic_agent.pending_orders.append(market_action)
                         log_action(self.logger, agent.index, f"Order: {market_action}")
                     else:
@@ -240,132 +358,183 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
         global_action = GlobalCryptoMarketAction(actions=agent_actions)
         try:
             env_state = env.step(global_action)
+            
+            if isinstance(env_state.global_observation, CryptoMarketGlobalObservation):
+                self.process_environment_state(env_state)
+                self.last_env_state = env_state
+            else:
+                self.logger.error(f"Unexpected global observation type: {type(env_state.global_observation)}")
+
         except Exception as e:
             self.logger.error(f"Error in environment {self.environment_name}: {str(e)}")
             raise e
 
         self.logger.info(f"Completed {self.environment_name} step")
 
-        # Process the environment state
-        if isinstance(env_state.global_observation, CryptoMarketGlobalObservation):
-            self.process_environment_state(env_state)
-
-        # Store the last environment state
-        self.last_env_state = env_state
-
-        # Run reflection step
         log_section(self.logger, "AGENT REFLECTIONS")
         await self.cognitive_processor.run_parallel_reflect(
             self.agents,
             self.environment_name
         )
 
-    def set_agent_system_messages(self, round_num: int, coin: str):
+    def set_agent_system_messages(self, round_num: int):
+        """Set system messages for agents with support for multiple tokens"""
         for agent in self.agents:
-            # Get correct token address based on coin name
-            token_address = self.ethereum_interface.get_token_address(coin)  # Use coin parameter instead of hardcoded DOGE
+            # Get balances and prices for all supported tokens
+            token_info = []
+            portfolio_value = 0.0
             
-            # Get price for the correct token pair
-            pair_info = self.ethereum_interface.get_pair_info(
-                token_address,
-                self.quote_token_address
-            )
-            
-            # Convert price from wei (1e18) to normal units
-            current_price = pair_info['token0_price_in_token1'] / 1e18
-            
-            # Get balances and convert from wei
-            token_balance = self.ethereum_interface.get_erc20_balance(
-                agent.economic_agent.ethereum_address,
-                token_address
-            ) / 1e18
-            
+            # Get USDC info first
+            usdc_address = self.ethereum_interface.get_token_address('USDC')
+            usdc_info = self.ethereum_interface.get_erc20_info(usdc_address)
+            usdc_decimals = usdc_info['decimals']
             usdc_balance = self.ethereum_interface.get_erc20_balance(
                 agent.economic_agent.ethereum_address,
-                self.quote_token_address
-            ) / 1e18
-            
-            # Calculate portfolio value in USDC (using normal units now)
-            portfolio_value = usdc_balance + (token_balance * current_price)
-            
+                usdc_address
+            ) / (10 ** usdc_decimals)
+            portfolio_value += usdc_balance
+            token_info.append(f"USDC Balance: {usdc_balance:.2f}")
+
+            # Get info for all trading tokens
+            for token in self.environment.mechanism.tokens:
+                try:
+                    token_address = self.ethereum_interface.get_token_address(token)
+                    token_info_data = self.ethereum_interface.get_erc20_info(token_address)
+                    token_decimals = token_info_data['decimals']
+                    
+                    # Get token balance
+                    token_balance = self.ethereum_interface.get_erc20_balance(
+                        agent.economic_agent.ethereum_address,
+                        token_address
+                    ) / (10 ** token_decimals)
+                    
+                    # Get current price
+                    pair_info = self.ethereum_interface.get_pair_info(
+                        token_address,
+                        usdc_address
+                    )
+                    current_price = pair_info['token0_price_in_token1'] / 1e18
+                    
+                    # Calculate token value in USDC
+                    token_value = token_balance * current_price
+                    portfolio_value += token_value
+                    
+                    token_info.append(
+                        f"{token} Balance: {token_balance:.4f} (Price: {current_price:.4f} USDC, Value: {token_value:.2f} USDC)"
+                    )
+                    
+                except Exception as e:
+                    self.logger.warning(f"Error getting info for {token}: {str(e)}")
+                    continue
+
+            # Create system message with all token information
+            token_status = "\n".join(token_info)
             agent.system = (
-                f"Round {round_num}: You have {usdc_balance:.2f} USDC and {token_balance:.2f} units of {coin}. "
-                f"Current market price: {current_price:.4f} USDC per {coin}. "
-                f"Portfolio value: {portfolio_value:.2f} USDC. "
-                f"Try to trade whenever there's opportunities for profit"
+                f"Round {round_num}:\n"
+                f"{token_status}\n"
+                f"Total Portfolio Value: {portfolio_value:.2f} USDC\n"
+                f"Available Trading Pairs: {', '.join([f'{token}/USDC' for token in self.environment.mechanism.tokens])}\n"
+                f"Try to trade whenever there's an opportunity for profit. "
+                f"Don't be afraid to make trades when conditions are favorable."
             )
+            
+            # Log the system message
+            self.logger.info(f"Agent {agent.index} system message:")
+            self.logger.info(agent.system)
+            self.logger.info("---")
+
     def process_environment_state(self, env_state: EnvironmentStep):
         global_observation = env_state.global_observation
         if not isinstance(global_observation, CryptoMarketGlobalObservation):
             self.logger.error(f"Unexpected global observation type: {type(global_observation)}")
             return
 
-        # Get current market prices from EVM
-        current_prices = {}
-        for token_address in self.token_addresses:
-            pair_info = self.ethereum_interface.get_pair_info(
-                token_address,
-                self.quote_token_address
-            )
-            current_prices[token_address] = pair_info['token0_price_in_token1']
+        # Update agent states with their observations
+        for agent_id, agent_observation in global_observation.observations.items():
+            try:
+                agent = next((agent for agent in self.agents if agent.id == agent_id), None)
+                if agent:
+                    agent.last_observation = agent_observation
+                    agent.last_step = env_state
+            except Exception as e:
+                self.logger.error(f"Error updating agent {agent_id} state: {str(e)}")
 
-        # Track trades and calculate rewards
-        agent_rewards = {}
+        # Initialize tracker if not exists
+        if not hasattr(self, 'tracker'):
+            self.tracker = CryptoTracker()
+
+        # Process trades from global observation
         self.logger.info(f"Processing {len(global_observation.all_trades)} trades")
-        
         log_section(self.logger, "TRADES")
+
         for trade in global_observation.all_trades:
             try:
-                buyer = next(agent for agent in self.agents if agent.id == trade.buyer_id)
-                seller = next(agent for agent in self.agents if agent.id == trade.seller_id)
+                # Skip processing if it's a HOLD action
+                if trade.action_type == OrderType.HOLD:
+                    self.logger.info(f"Agent {trade.buyer_id} holds {trade.coin}")
+                    continue
+
+                # Process buyer side
+                if trade.buyer_id != "MARKET":
+                    try:
+                        buyer = next(agent for agent in self.agents if agent.id == trade.buyer_id)
+                        buyer.economic_agent.process_trade(trade)
+                        self.update_agent_balances(buyer.economic_agent)
+                    except StopIteration:
+                        self.logger.warning(f"Buyer {trade.buyer_id} not found in agents")
+
+                # Process seller side
+                if trade.seller_id not in ["MARKET", "Orderbook"]:
+                    try:
+                        seller = next(agent for agent in self.agents if agent.id == trade.seller_id)
+                        seller.economic_agent.process_trade(trade)
+                        self.update_agent_balances(seller.economic_agent)
+                    except StopIteration:
+                        self.logger.warning(f"Seller {trade.seller_id} not found in agents")
+
+                # Add trade to tracker with current round
+                self.tracker.add_trade(trade, env_state.current_round)
                 
-                # Get current market price for reward calculation
-                current_price = current_prices[trade.token_address]
+                # Update price history
+                self.tracker.update_price_history(trade.price, trade.coin)
                 
-                # Process the trade for both agents
-                buyer.economic_agent.process_trade(trade)
-                seller.economic_agent.process_trade(trade)
-                
-                # Calculate rewards using current market price
-                buyer_reward = buyer.economic_agent.calculate_trade_reward(trade, current_price)
-                seller_reward = seller.economic_agent.calculate_trade_reward(trade, current_price)
-                
-                # Update agent balances from EVM
-                self.update_agent_balances(buyer.economic_agent)
-                self.update_agent_balances(seller.economic_agent)
-                
-                agent_rewards[buyer.id] = agent_rewards.get(buyer.id, 0) + buyer_reward
-                agent_rewards[seller.id] = agent_rewards.get(seller.id, 0) + seller_reward
-                
-                self.tracker.add_trade(trade)
-                
-            except Exception as e:
-                self.logger.error(f"Error processing trade: {str(e)}")
+                # Log trade details
+                self.logger.info(
+                    f"Trade executed - {trade.coin}: "
+                    f"Price: {trade.price:.6f} USDC, "
+                    f"Quantity: {trade.quantity:.6f}, "
+                    f"Buyer: {trade.buyer_id}, "
+                    f"Seller: {trade.seller_id}"
+                )
+
+            except Exception as ex:
+                self.logger.error(f"Error processing trade {trade}: {str(ex)}")
                 self.logger.exception("Exception details:")
 
-        # Store rewards and update environment state
-        env_state.info['agent_rewards'] = agent_rewards
-        self.agent_rewards = agent_rewards
-        self.last_env_state = env_state
+        # Log current prices from global observation
+        self.logger.info("Current market prices:")
+        for token, price in global_observation.current_prices.items():
+            self.logger.info(f"{token}: {price:.6f} USDC")
+
 
     def update_agent_balances(self, agent: CryptoEconomicAgent):
         """Update agent balances from EVM"""
         # Get ETH balance
         eth_balance = self.ethereum_interface.get_eth_balance(agent.ethereum_address)
         eth_balance_readable = eth_balance / 1e18
-        # Get token balances
-        token_balances = {}
-        for token_address in self.token_addresses:
+        
+        # Get only the token balance for agent's assigned coin
+        token_address = self.token_addresses.get(agent.coin)
+        if token_address:
             balance = self.ethereum_interface.get_erc20_balance(
                 agent.ethereum_address,
                 token_address
             )
-            token_balances[token_address] = balance
+            # Update agent's portfolio
+            agent.update_token_balance(agent.coin, balance)
         
-        # Update agent's portfolio
-        agent.endowment.current_portfolio.cash = eth_balance_readable
-        for token_address, balance in token_balances.items():
-            agent.update_token_balance(self.token_symbols[token_address], balance)
+        # Update ETH balance
+        agent.update_cash_balance(eth_balance_readable)
 
     def get_round_summary(self, round_num: int) -> dict:
         # Return a summary of the round
@@ -406,45 +575,94 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
         # Print simulation summary after all rounds
         self.print_summary()
 
+
     def print_summary(self):
         log_section(self.logger, "CRYPTO MARKET SIMULATION SUMMARY")
 
+        # Constants for decimal conversion
+        WEI_TO_ETH = 1e18  # 1 ETH = 10^18 wei
+        
+        # Get token decimals for all tokens
+        token_info = {}
+        for token in self.environment.mechanism.tokens:
+            token_address = self.ethereum_interface.get_token_address(token)
+            info = self.ethereum_interface.get_erc20_info(token_address)
+            token_info[token] = {
+                'decimals': info['decimals'],
+                'address': token_address
+            }
+        
+        # Get USDC info
+        usdc_info = self.ethereum_interface.get_erc20_info(self.quote_token_address)
+        USDC_DECIMALS = usdc_info['decimals']
+
         # Calculate final portfolio values and rewards
         total_portfolio_value = 0.0
-        WEI_TO_ETH = 1000000000000000000  # 1 ETH = 10^18 wei
 
         for agent in self.agents:
-            current_price = self.environment.mechanism.current_price
+            # Get current prices for all tokens
+            current_prices = self.environment.mechanism.current_prices
+            
+            # Get ETH balance
             eth_balance = self.ethereum_interface.get_eth_balance(agent.economic_agent.ethereum_address)
-            token_balance = self.ethereum_interface.get_erc20_balance(
-                agent.economic_agent.ethereum_address,
-                self.token_addresses[0]
-            )
             eth_balance_readable = eth_balance / WEI_TO_ETH
-            portfolio_value = eth_balance_readable + token_balance * current_price
+            
+            # Initialize portfolio calculation
+            portfolio_value = 0.0
+            balance_info = []
+
+            # Get USDC balance
+            usdc_balance = self.ethereum_interface.get_erc20_balance(
+                agent.economic_agent.ethereum_address,
+                self.quote_token_address
+            ) / (10 ** USDC_DECIMALS)
+            portfolio_value += usdc_balance
+            balance_info.append(f"USDC: {usdc_balance:.2f}")
+
+            # Get balances for all trading tokens
+            for token, info in token_info.items():
+                token_balance = self.ethereum_interface.get_erc20_balance(
+                    agent.economic_agent.ethereum_address,
+                    info['address']
+                ) / (10 ** info['decimals'])
+                
+                token_value = token_balance * current_prices.get(token, 0)
+                portfolio_value += token_value
+                
+                balance_info.append(
+                    f"{token}: {token_balance:.4f} (Value: {token_value:.2f} USDC)"
+                )
+
             total_portfolio_value += portfolio_value
-            self.logger.info(f"Agent {agent.index} final portfolio value: {portfolio_value:.4f} ETH")
 
-        summary = self.tracker.get_summary()
-        print(f"\nCrypto Market Environment:")
-        print(f"Total number of trades: {summary['total_trades']}")
-        print(f"Final price: {self.environment.mechanism.current_price:.4f} ETH per token")
-        print(f"Price history: {summary['price_history']}")
+            # Log agent summary
+            self.logger.info(f"\nAgent {agent.index} Summary:")
+            self.logger.info(f"ETH Balance: {eth_balance_readable:.4f}")
+            for balance in balance_info:
+                self.logger.info(balance)
+            self.logger.info(f"Total Portfolio Value: {portfolio_value:.2f} USDC")
+            
+            # Log agent's trading history
+            trades = [t for t in self.tracker.trades if t.buyer_id == agent.id or t.seller_id == agent.id]
+            if trades:
+                self.logger.info("\nTrading History:")
+                for trade in trades:
+                    self.logger.info(
+                        f"{'Bought' if trade.buyer_id == agent.id else 'Sold'} "
+                        f"{trade.quantity:.4f} {trade.coin} @ {trade.price:.4f} USDC"
+                    )
 
-        print("\nFinal Agent Portfolios:")
-        for agent in self.agents:
-            print(f"Agent {agent.index}:")
-            current_price = self.environment.mechanism.current_price
-            eth_balance = self.ethereum_interface.get_eth_balance(agent.economic_agent.ethereum_address)
-            token_balance = self.ethereum_interface.get_erc20_balance(
-                agent.economic_agent.ethereum_address,
-                self.token_addresses[0]
-            )
-            eth_balance_readable = eth_balance / WEI_TO_ETH
-            portfolio_value = eth_balance_readable + token_balance * current_price
-            print(f"  ETH Balance: {eth_balance_readable:.4f} ETH")
-            print(f"  {self.environment.mechanism.coin_name} Balance: {token_balance}")
-            print(f"  Portfolio Value: {portfolio_value:.4f} ETH")
-            if agent.memory:
-                print(f"  Last Reflection: {agent.memory[-1]['content']}")
-            print()
+        # Log overall market summary
+        self.logger.info("\nOverall Market Summary:")
+        self.logger.info(f"Total Portfolio Value: {total_portfolio_value:.2f} USDC")
+        self.logger.info("Final Token Prices:")
+        for token, price in current_prices.items():
+            self.logger.info(f"{token}: {price:.4f} USDC")
+        
+        # Log trading volume statistics using tracker's trades
+        if self.tracker.trades:
+            total_volume = sum(t.quantity * t.price for t in self.tracker.trades)
+            avg_price = sum(t.price for t in self.tracker.trades) / len(self.tracker.trades)
+            self.logger.info(f"\nTotal Trading Volume: {total_volume:.2f} USDC")
+            self.logger.info(f"Average Trade Price: {avg_price:.4f} USDC")
+            self.logger.info(f"Total Number of Trades: {len(self.tracker.trades)}")

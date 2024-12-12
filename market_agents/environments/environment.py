@@ -80,6 +80,7 @@ class EnvironmentStep(BaseModel):
     """Represents the output of a single environment step."""
     global_observation: GlobalObservation
     done: bool
+    current_round: Optional[int] = Field(default=0)
     info: Dict[str, Any]
 
     @classmethod

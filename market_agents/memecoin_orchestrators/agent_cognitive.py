@@ -12,15 +12,16 @@ from market_agents.orchestrators.logger_utils import (
 )
 
 class AgentCognitiveProcessor:
-    def __init__(self, ai_utils, data_inserter, logger: logging.Logger):
+    def __init__(self, ai_utils, data_inserter, logger: logging.Logger, tool_mode=False):
         self.ai_utils = ai_utils
         self.data_inserter = data_inserter
         self.logger = logger
+        self.tool_mode = tool_mode
 
     async def run_parallel_perceive(self, agents: List[MarketAgent], environment_name: str) -> List[Any]:
         perception_prompts = []
         for agent in agents:
-            perception_prompt = await agent.perceive(environment_name, return_prompt=True)
+            perception_prompt = await agent.perceive(environment_name, return_prompt=True, structured_tool=self.tool_mode)
             perception_prompts.append(perception_prompt)
         
         perceptions = await self.ai_utils.run_parallel_ai_completion(perception_prompts, update_history=False)
@@ -41,7 +42,7 @@ class AgentCognitiveProcessor:
     async def run_parallel_action(self, agents: List[MarketAgent], environment_name: str) -> List[Any]:
         action_prompts = []
         for agent in agents:
-            action_prompt = await agent.generate_action(environment_name, agent.last_perception, return_prompt=True)
+            action_prompt = await agent.generate_action(environment_name, agent.last_perception, return_prompt=True, structured_tool=self.tool_mode)
             action_prompts.append(action_prompt)
         actions = await self.ai_utils.run_parallel_ai_completion(action_prompts, update_history=False)
         self.data_inserter.insert_ai_requests(self.ai_utils.get_all_requests())
@@ -52,7 +53,7 @@ class AgentCognitiveProcessor:
         agents_with_observations = []
         for agent in agents:
             if agent.last_observation:
-                reflect_prompt = await agent.reflect(environment_name, return_prompt=True)
+                reflect_prompt = await agent.reflect(environment_name, return_prompt=True, structured_tool=self.tool_mode)
                 reflection_prompts.append(reflect_prompt)
                 agents_with_observations.append(agent)
                 

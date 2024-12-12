@@ -26,10 +26,17 @@ class EthereumInterface:
             self.mnemonic = f.read().strip()
 
         # Load testnet data from project root 
-        testnet_data_path = os.path.join(root_dir, 'testnet_data.json')
+        testnet_data_path = os.path.join(root_dir, 'agent_evm_testnet/testnet_data.json')
         with open(testnet_data_path, 'r') as f:
             self.testnet_data = json.load(f)
-        
+
+        self.token_address_by_symbol = self.testnet_data['token_addresses']
+        self.token_symbols = self.testnet_data['token_symbols']
+        self.token_addresses = [self.token_address_by_symbol[symbol] for symbol in self.token_symbols]
+        self.token_symbol_by_address = {
+            address: symbol for symbol, address in self.token_address_by_symbol.items()
+        }
+
         # TODO: maybe find a better way to do this:
         Account.enable_unaudited_hdwallet_features()
 
@@ -301,26 +308,19 @@ class EthereumInterface:
     def get_token_address(self, symbol: str) -> str:
         """Get token address by symbol"""
         try:
-            # Get the index from token_symbols list
-            index = self.testnet_data['token_symbols'].index(symbol)
-            # Use that index to get the address from token_addresses list
-            return self.testnet_data['token_addresses'][index]
-        except (ValueError, IndexError) as e:
-            available_tokens = self.testnet_data['token_symbols']
+            return self.token_address_by_symbol[symbol]
+        except KeyError:
+            available_tokens = list(self.token_address_by_symbol.keys())
             raise ValueError(f"Token symbol '{symbol}' not found. Available tokens: {available_tokens}")
-        except KeyError as e:
-            raise KeyError(f"Missing required data in testnet_data.json: {str(e)}")  
         
     @external
     def get_token_symbol(self, address: str) -> str:
         """Get token symbol by address"""
         try:
-            index = self.testnet_data['token_addresses'].index(address)
-            return self.testnet_data['token_symbols'][index]
-        except ValueError:
-            raise ValueError(f"Token address '{address}' not found")
+            return self.token_symbol_by_address[address]
         except KeyError:
-            raise KeyError("Token data not properly loaded from testnet_data.json")
+            available_addresses = list(self.token_symbol_by_address.keys())
+            raise ValueError(f"Token address '{address}' not found.")
 
 @init
 def initialize_evm_interface() -> EthereumInterface:
@@ -336,8 +336,9 @@ if __name__ == '__main__':
     orderbook_abi = ei.testnet_data['orderbook_abi']
 
     erc20_abi = ei.testnet_data['token_abi']
-    erc20_addresses = ei.testnet_data['token_addresses']
     erc20_token_symbols = ei.testnet_data['token_symbols']
+    erc20_addresses = [ei.testnet_data['token_addresses'][symbol] for symbol in erc20_token_symbols]
+
 
 
     print('Calling get_eth_balance...')

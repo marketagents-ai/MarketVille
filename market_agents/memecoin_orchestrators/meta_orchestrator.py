@@ -19,6 +19,7 @@ from market_agents.memecoin_orchestrators.crypto_models import Crypto, Endowment
 from market_agents.inference.parallel_inference import ParallelAIUtilities, RequestLimits
 from market_agents.memecoin_orchestrators.base_orchestrator import BaseEnvironmentOrchestrator
 from market_agents.memecoin_orchestrators.config import OrchestratorConfig, load_config
+from market_agents.memecoin_orchestrators.groupchat_orchestrator import GroupChatOrchestrator
 from market_agents.memecoin_orchestrators.insert_simulation_data import SimulationDataInserter
 from market_agents.memecoin_orchestrators.logger_utils import (
     log_section,
@@ -106,9 +107,9 @@ class MetaOrchestrator:
                 cash=agent_config.get('initial_cash', 1000),
                 coins=[
                     Crypto(
-                        symbol=agent_config.get('coin_name', 'TOKEN'),
+                        symbol=agent_config.get('asset_name', 'TOKEN'),
                         positions=[Position(
-                            quantity=agent_config.get('initial_coin', 100),
+                            quantity=agent_config.get('initial_asset', 100),
                             purchase_price=1.0
                         )]
                     )
@@ -126,7 +127,7 @@ class MetaOrchestrator:
                 id=agent_uuid,
                 endowment=endowment,
                 max_relative_spread=agent_config.get('max_relative_spread', 0.2),
-                coin=agent_config.get('coin_name', 'TOKEN'),
+                coin=agent_config.get('asset_name', 'TOKEN'),
                 ethereum_address=account['address'],
                 private_key=account['private_key']
             )
@@ -172,10 +173,19 @@ class MetaOrchestrator:
                     data_inserter=self.data_inserter,
                     logger=self.logger
                 )
+            elif env_name == 'group_chat':
+                orchestrator = GroupChatOrchestrator(
+                    config=env_config,
+                    orchestrator_config=self.config,
+                    agents=self.agents,
+                    ai_utils=self.ai_utils,
+                    data_inserter=self.data_inserter,
+                    logger=self.logger
+                )
             else:
                 self.logger.warning(f"Unknown environment: {env_name}")
                 continue
-            
+
             orchestrators[env_name] = orchestrator
             self.logger.info(f"Initialized {env_name} environment")
             
