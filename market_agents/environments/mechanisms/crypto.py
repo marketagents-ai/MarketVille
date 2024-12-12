@@ -1,8 +1,10 @@
 # crypto_market.py
 
+from datetime import datetime
 import logging
 import random
 from typing import Any, List, Dict, Type, Optional, Tuple
+import uuid
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from market_agents.environments.environment import (
     EnvironmentHistory, Mechanism, LocalAction, GlobalAction, LocalObservation, GlobalObservation,
@@ -15,11 +17,12 @@ logger = logging.getLogger(__name__)
 
 
 class MarketSummary(BaseModel):
-    trades_count: int = Field(default=0, description="Number of trades executed")
-    average_price: float = Field(default=0.0, description="Average price of trades")
-    total_volume: int = Field(default=0, description="Total volume of trades")
-    price_range: Tuple[float, float] = Field(default=(0.0, 0.0), description="Range of prices")
-
+    """Summary of market activity for multiple tokens"""
+    trades_count: int = Field(default=0, description="Total number of trades across all tokens")
+    token_summaries: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Summary statistics for each token"
+    )
 
 class CryptoMarketAction(LocalAction):
     action: MarketAction
@@ -58,16 +61,40 @@ class GlobalCryptoMarketAction(GlobalAction):
 
 
 class CryptoMarketObservation(BaseModel):
-    trades: List[Trade] = Field(default_factory=list, description="List of trades the agent participated in")
-    market_summary: MarketSummary = Field(default_factory=MarketSummary, description="Summary of market activity")
-    current_price: float = Field(default=0.1, description="Current market price")
-    portfolio_value: float = Field(default=0.0, description="Total value of the agent's portfolio")
-    eth_balance: int = Field(default=0, description="Agent's ETH balance")
-    token_balance: int = Field(default=0, description="Agent's token balance")
-    price_history: List[float] = Field(default_factory=list, description="Historical prices")
+    """Observation of the crypto market state for an agent"""
+    trades: List[Trade] = Field(
+        default_factory=list, 
+        description="List of trades the agent participated in"
+    )
+    market_summary: MarketSummary = Field(
+        default_factory=MarketSummary, 
+        description="Summary of market activity"
+    )
+    current_prices: Dict[str, float] = Field(
+        default_factory=dict,
+        description="Current prices for each supported token"
+    )
+    portfolio_value: float = Field(
+        default=0.0, 
+        description="Total value of the agent's portfolio in USDC"
+    )
+    eth_balance: int = Field(
+        default=0, 
+        description="Agent's ETH balance in wei"
+    )
+    token_balances: Dict[str, float] = Field(
+        default_factory=dict,
+        description="Map of token symbol to balance"
+    )
+    price_histories: Dict[str, List[float]] = Field(
+        default_factory=dict,
+        description="Historical prices for each supported token"
+    )
 
 
-class CryptoMarketLocalObservation(LocalObservation):
+class CryptoMarketLocalObservation(BaseModel):
+    """Local observation for an individual agent in the crypto market"""
+    agent_id: str
     observation: CryptoMarketObservation
 
 
@@ -75,9 +102,8 @@ class CryptoMarketGlobalObservation(GlobalObservation):
     observations: Dict[str, CryptoMarketLocalObservation]
     all_trades: List[Trade] = Field(default_factory=list, description="All trades executed in this round")
     market_summary: MarketSummary = Field(default_factory=MarketSummary, description="Summary of market activity")
-    current_price: float = Field(default=0.1, description="Current market price")
-    price_history: List[float] = Field(default_factory=list, description="Historical prices")
-
+    current_prices: Dict[str, float] = Field(default_factory=dict, description="Current market prices")
+    price_histories: Dict[str, List[float]] = Field(default_factory=dict, description="Historical prices")
 
 class CryptoMarketActionSpace(ActionSpace):
     allowed_actions: List[Type[LocalAction]] = [CryptoMarketAction]
@@ -95,13 +121,26 @@ class CryptoMarketMechanism(Mechanism):
     max_rounds: int = Field(default=100, description="Maximum number of trading rounds")
     current_round: int = Field(default=0, description="Current round number")
     trades: List[Trade] = Field(default_factory=list, description="List of executed trades")
-    coin_name: str = Field(default="DOGE", description="Cryptocurrency being traded")
-    current_price: float = Field(default=0.1, description="Current market price")
-    price_history: List[float] = Field(default_factory=lambda: [0.1])
+    tokens: List[str] = Field(default=["DOGE"], description="List of supported tokens")
+    current_prices: Dict[str, float] = Field(
+        default_factory=lambda: {"DOGE": 0.1},
+        description="Current market prices for each token"
+    )
+    price_histories: Dict[str, List[float]] = Field(
+        default_factory=lambda: {"DOGE": [0.1]},
+        description="Price history for each token"
+    )
+    
     sequential: bool = Field(default=False, description="Whether the mechanism is sequential")
     agent_registry: Dict[str, Any] = Field(default_factory=dict, description="Registry of agents")
-    ethereum_interface: EthereumInterface = Field(default_factory=EthereumInterface, description="Ethereum Interface")
-    token_addresses: Dict[str, str] = Field(default_factory=dict, description="Token addresses")
+    ethereum_interface: EthereumInterface = Field(
+        default_factory=EthereumInterface,
+        description="Ethereum Interface"
+    )
+    token_addresses: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Mapping of token symbols to addresses"
+    )
     orderbook_address: str = Field(default="", description="Orderbook contract address")
     minter_private_key: str = Field(default="", description="Private key of the minter account")
 
@@ -116,32 +155,39 @@ class CryptoMarketMechanism(Mechanism):
         logger.info(f"Registered agent {agent_id} with address {agent.ethereum_address}")
 
     def setup(self):
-        """Initialize token addresses, blockchain parameters, and current price."""
+        """Initialize token addresses, blockchain parameters, and current prices."""
         self.token_addresses = self.ethereum_interface.testnet_data['token_addresses']
         self.orderbook_address = self.ethereum_interface.testnet_data['orderbook_address']
         self.minter_private_key = self.ethereum_interface.accounts[0]['private_key']
         
-        # Initialize current price from orderbook
-        try:
-            token_address = self.ethereum_interface.get_token_address(self.coin_name)
-            usdc_address = self.ethereum_interface.get_token_address('USDC')
-            
-            pair_info = self.ethereum_interface.get_pair_info(
-                token_address,
-                usdc_address
-            )
-            
-            base_unit_price = pair_info['token0_price_in_token1']
-            self.current_price = self._convert_to_decimal_price(base_unit_price)
-            if self.current_price == 0:
-                self.current_price = 0.1
+        # Initialize prices for all supported tokens
+        quote_address = self.ethereum_interface.get_token_address('USDC')
+        
+        for token in self.tokens:
+            try:
+                token_address = self.ethereum_interface.get_token_address(token)
+                if not token_address:
+                    logger.warning(f"Address not found for token {token}")
+                    continue
+                    
+                pair_info = self.ethereum_interface.get_pair_info(
+                    token_address,
+                    quote_address
+                )
                 
-        except Exception as e:
-            logger.warning(f"Failed to get initial price from blockchain: {str(e)}. Using default price of 0.1")
-            self.current_price = 0.0
-            
-        # Initialize price history with current price
-        self.price_history = [self.current_price]
+                base_unit_price = pair_info['token0_price_in_token1']
+                self.current_prices[token] = base_unit_price / 1e18
+                if self.current_prices[token] == 0:
+                    self.current_prices[token] = 0.1
+                    
+                # Initialize price history
+                if token not in self.price_histories:
+                    self.price_histories[token] = [self.current_prices[token]]
+                    
+            except Exception as e:
+                logger.warning(f"Failed to get initial price for {token}: {str(e)}. Using default price of 0.1")
+                self.current_prices[token] = 0.1
+                self.price_histories[token] = [0.1]
 
     def step(self, action: GlobalCryptoMarketAction) -> EnvironmentStep:
         self.current_round += 1
@@ -149,9 +195,6 @@ class CryptoMarketMechanism(Mechanism):
         # Process actions (buy/sell/hold) using the EthereumInterface
         new_trades = self._process_actions(action.actions)
         self.trades.extend(new_trades)
-
-        # Update price based on recent trades
-        self._update_price(new_trades)
 
         market_summary = self._create_market_summary(new_trades)
         observations = self._create_observations(market_summary)
@@ -162,232 +205,174 @@ class CryptoMarketMechanism(Mechanism):
                 observations=observations,
                 all_trades=new_trades,
                 market_summary=market_summary,
-                current_price=self.current_price,
-                price_history=self.price_history
+                current_prices=self.current_prices.copy(),
+                price_histories=self.price_histories.copy()
             ),
             done=done,
             info={"current_round": self.current_round}
         )
     
-    def _process_actions(self, actions: Dict[str, CryptoMarketAction]) -> List[Trade]:
+    def _process_actions(self, actions: Dict[str, MarketAction]) -> List[Trade]:
+        """Process all market actions and return list of executed trades."""
         trades = []
-
-        for agent_id, action in actions.items():
-            agent = self.agent_registry.get(agent_id)
-            if not agent:
-                logger.error(f"Agent {agent_id} not found in registry.")
-                continue
-
-            market_action = action.action
-            if market_action.order_type == OrderType.HOLD:
-                # Record hold action
-                trade = Trade(
-                    trade_id=len(self.trades),
-                    buyer_id=agent_id,
-                    seller_id="MARKET",
-                    price=self.current_price,
-                    bid_price=self.current_price,
-                    ask_price=self.current_price,
-                    quantity=0,
-                    coin="USDC",
-                    tx_hash=None,
-                    action_type=OrderType.HOLD
-                )
-                trades.append(trade)
-                logger.info(f"Agent {agent_id} holds. Current price: {self.current_price}")
-                continue
-
+        
+        for agent_id, market_action in actions.items():
             try:
-                # Get token addresses and decimals
-                token_address = self.ethereum_interface.get_token_address(market_action.token)
-                usdc_address = self.ethereum_interface.get_token_address('USDC')
-                token_decimals = self.ethereum_interface.get_erc20_info(token_address)['decimals']
-                usdc_decimals = self.ethereum_interface.get_erc20_info(usdc_address)['decimals']
+                agent = self.agent_registry.get(agent_id)
+                if not agent:
+                    logger.error(f"Agent {agent_id} not found in registry")
+                    continue
 
-                if market_action.order_type == OrderType.BUY:
-                    # For buy: swap USDC -> Token
-                    usdc_amount = int(market_action.price * market_action.quantity * (10 ** usdc_decimals))
-                    
-                    # Verify USDC balance
-                    usdc_balance = self.ethereum_interface.get_erc20_balance(
-                        agent.ethereum_address,
-                        usdc_address
-                    )
-                    if usdc_balance < usdc_amount:
-                        logger.error(f"Agent {agent_id} has insufficient USDC balance. " +
-                                f"Has: {usdc_balance/(10**usdc_decimals)}, Needs: {market_action.price * market_action.quantity}")
-                        continue
-
-                    # Approve USDC spending
-                    allowance = self.ethereum_interface.get_erc20_allowance(
-                        owner=agent.ethereum_address,
-                        spender=self.orderbook_address,
-                        contract_address=usdc_address
-                    )
-                    if allowance < usdc_amount:
-                        tx_hash = self.ethereum_interface.approve_erc20(
-                            spender=self.orderbook_address,
-                            amount=usdc_amount,
-                            contract_address=usdc_address,
-                            private_key=agent.private_key
-                        )
-                        logger.info(f"Agent {agent_id} approved {usdc_amount/(10**usdc_decimals)} USDC. TxHash: {tx_hash}")
-
-                    # Execute swap USDC -> Token
-                    tx_hash = self.ethereum_interface.swap(
-                        source_token_address=usdc_address,
-                        source_token_amount=usdc_amount,
-                        target_token_address=token_address,
-                        private_key=agent.private_key
-                    )
-
-                else:  # SELL
-                    # For sell: swap Token -> USDC
-                    token_amount = int(market_action.quantity * (10 ** token_decimals))
-                    
-                    # Verify token balance
-                    token_balance = self.ethereum_interface.get_erc20_balance(
-                        agent.ethereum_address,
-                        token_address
-                    )
-                    if token_balance < token_amount:
-                        logger.error(f"Agent {agent_id} has insufficient {market_action.token} balance. " +
-                                f"Has: {token_balance/(10**token_decimals)}, Needs: {market_action.quantity}")
-                        continue
-
-                    # Approve token spending
-                    allowance = self.ethereum_interface.get_erc20_allowance(
-                        owner=agent.ethereum_address,
-                        spender=self.orderbook_address,
-                        contract_address=token_address
-                    )
-                    if allowance < token_amount:
-                        tx_hash = self.ethereum_interface.approve_erc20(
-                            spender=self.orderbook_address,
-                            amount=token_amount,
-                            contract_address=token_address,
-                            private_key=agent.private_key
-                        )
-                        logger.info(f"Agent {agent_id} approved {token_amount/(10**token_decimals)} {market_action.token}. TxHash: {tx_hash}")
-
-                    # Execute swap Token -> USDC
-                    tx_hash = self.ethereum_interface.swap(
-                        source_token_address=token_address,
-                        source_token_amount=token_amount,
-                        target_token_address=usdc_address,
-                        private_key=agent.private_key
-                    )
-
-                # Record the trade
-                trade = Trade(
-                    trade_id=len(self.trades),
-                    buyer_id=agent_id if market_action.order_type == OrderType.BUY else "MARKET",
-                    seller_id=agent_id if market_action.order_type == OrderType.SELL else "MARKET",
-                    price=market_action.price,
-                    bid_price=market_action.price,
-                    ask_price=market_action.price,
-                    quantity=market_action.quantity,
-                    coin=market_action.token,
-                    tx_hash=tx_hash,
-                    action_type=market_action.order_type
-                )
-                trades.append(trade)
-                logger.info(f"Executed {market_action.order_type}: Agent {agent_id} {market_action.order_type}s " +
-                        f"{market_action.quantity} {market_action.token} at {market_action.price} USDC. TxHash: {tx_hash}")
-
+                if market_action.action.order_type == OrderType.BUY:
+                    trade = self._execute_buy(agent, market_action.action)
+                    if trade:
+                        trades.append(trade)
+                        self.trades.append(trade)
+                        
+                elif market_action.action.order_type == OrderType.SELL:
+                    trade = self._execute_sell(agent, market_action.action)
+                    if trade:
+                        trades.append(trade)
+                        self.trades.append(trade)
+                        
+                # HOLD orders require no execution
+                
             except Exception as e:
-                logger.error(f"Failed to execute {market_action.order_type} for agent {agent_id}: {str(e)}")
-                logger.exception("Full traceback:")
+                logger.error(f"Error processing action for agent {agent_id}: {str(e)}")
+                logger.error("Exception details:", exc_info=True)
                 continue
 
         return trades
-    #def _process_actions(self, actions: Dict[str, CryptoMarketAction]) -> List[Trade]:
-    #    trades = []
-    #    buy_orders = []
-    #    sell_orders = []
-#
-    #    # Collect buy and sell orders
-    #    for agent_id, action in actions.items():
-    #        agent = self.agent_registry.get(agent_id)
-    #        if not agent:
-    #            logger.error(f"Agent {agent_id} not found in registry.")
-    #            continue
-#
-    #        market_action = action.action
-    #        if market_action.order_type == OrderType.HOLD:
-    #            logger.info(f"Agent {agent_id} holds.")
-    #            continue
-#
-    #        try:
-    #            if market_action.order_type == OrderType.BUY:
-    #                buy_orders.append((agent_id, agent, market_action))
-    #            elif market_action.order_type == OrderType.SELL:
-    #                sell_orders.append((agent_id, agent, market_action))
-    #        except Exception as e:
-    #            logger.error(f"Error processing action for agent {agent_id}: {str(e)}")
-    #            continue
-#
-    #    buy_orders.sort(key=lambda x: x[2].price, reverse=True)
-    #    sell_orders.sort(key=lambda x: x[2].price)
-#
-    #    # Match orders
-    #    while buy_orders and sell_orders:
-    #        buyer_id, buyer, buy_order = buy_orders[0]
-    #        seller_id, seller, sell_order = sell_orders[0]
-#
-    #        # Check if prices match (within tolerance)
-    #        if buy_order.price >= sell_order.price:
-    #            # Calculate trade price as midpoint
-    #            trade_price = (buy_order.price + sell_order.price) / 2
-    #            
-    #            # Calculate trade quantity
-    #            trade_quantity = min(buy_order.quantity, sell_order.quantity)
-#
-    #            # Execute the trade
-    #            try:
-    #                # Transfer tokens between agents
-    #                self._execute_p2p_trade(
-    #                    buyer=buyer,
-    #                    seller=seller,
-    #                    price=trade_price,
-    #                    quantity=trade_quantity
-    #                )
-#
-    #                # Record the trade
-    #                trade = Trade(
-    #                    trade_id=len(self.trades),
-    #                    buyer_id=buyer_id,
-    #                    seller_id=seller_id,
-    #                    price=trade_price,
-    #                    bid_price=buy_order.price,
-    #                    ask_price=sell_order.price,
-    #                    quantity=trade_quantity,
-    #                    coin=self.coin_name
-    #                )
-    #                trades.append(trade)
-    #                logger.info(f"Matched trade: {buyer_id} buys {trade_quantity} {self.coin_name} " +
-    #                          f"from {seller_id} at {trade_price} USDC")
-#
-    #                # Update order quantities
-    #                buy_order.quantity -= trade_quantity
-    #                sell_order.quantity -= trade_quantity
-#
-    #                # Remove fulfilled orders
-    #                if buy_order.quantity == 0:
-    #                    buy_orders.pop(0)
-    #                if sell_order.quantity == 0:
-    #                    sell_orders.pop(0)
-#
-    #            except Exception as e:
-    #                logger.error(f"Failed to execute trade: {str(e)}")
-    #                logger.exception("Full traceback:")
-    #                # Remove problematic orders
-    #                buy_orders.pop(0)
-    #                sell_orders.pop(0)
-    #        else:
-    #            break
-#
-    #    return trades
+    
+    def _create_market_summary(self, trades: List[Trade]) -> MarketSummary:
+        """Create market summary from trades, supporting multiple tokens"""
+        if not trades:
+            # Create empty summary with current prices for all tokens
+            token_summaries = {}
+            for token in self.tokens:
+                current_price = self.current_prices.get(token, 0.1)
+                token_summaries[token] = {
+                    'trades_count': 0,
+                    'average_price': current_price,
+                    'total_volume': 0,
+                    'price_range': (current_price, current_price)
+                }
+            return MarketSummary(
+                trades_count=0,
+                token_summaries=token_summaries
+            )
+
+        # Group trades by token
+        trades_by_token = {}
+        for trade in trades:
+            if trade.coin not in trades_by_token:
+                trades_by_token[trade.coin] = []
+            trades_by_token[trade.coin].append(trade)
+
+        # Calculate summary for each token
+        token_summaries = {}
+        for token in self.tokens:
+            token_trades = trades_by_token.get(token, [])
+            if token_trades:
+                prices = [t.price for t in token_trades]
+                volumes = [t.quantity for t in token_trades]
+                token_summaries[token] = {
+                    'trades_count': len(token_trades),
+                    'average_price': sum(prices) / len(prices),
+                    'total_volume': sum(volumes),
+                    'price_range': (min(prices), max(prices))
+                }
+            else:
+                current_price = self.current_prices.get(token, 0.1)
+                token_summaries[token] = {
+                    'trades_count': 0,
+                    'average_price': current_price,
+                    'total_volume': 0,
+                    'price_range': (current_price, current_price)
+                }
+
+        # Create overall summary
+        return MarketSummary(
+            trades_count=len(trades),
+            token_summaries=token_summaries
+        )
+
+    def _create_observations(self, market_summary: MarketSummary) -> Dict[str, CryptoMarketLocalObservation]:
+        """Create observations for all agents, including multi-token balances"""
+        observations = {}
+        
+        for agent_id, agent in self.agent_registry.items():
+            # Get balances for all supported tokens
+            token_balances = {}
+            portfolio_value = 0.0
+            
+            # Get USDC balance first
+            usdc_address = self.ethereum_interface.get_token_address('USDC')
+            usdc_info = self.ethereum_interface.get_erc20_info(usdc_address)
+            usdc_balance = self.ethereum_interface.get_erc20_balance(
+                agent.ethereum_address,
+                usdc_address
+            ) / (10 ** usdc_info['decimals'])
+            token_balances['USDC'] = usdc_balance
+            portfolio_value += usdc_balance
+
+            # Get balances for all trading tokens
+            for token in self.tokens:
+                token_address = self.ethereum_interface.get_token_address(token)
+                if not token_address:
+                    continue
+                    
+                token_info = self.ethereum_interface.get_erc20_info(token_address)
+                balance = self.ethereum_interface.get_erc20_balance(
+                    agent.ethereum_address,
+                    token_address
+                ) / (10 ** token_info['decimals'])
+                
+                current_price = self.current_prices.get(token, 0)
+                token_balances[token] = balance
+                portfolio_value += balance * current_price
+
+            base_observation = CryptoMarketObservation(
+                trades=self.trades,
+                market_summary=market_summary,
+                current_prices=self.current_prices.copy(),
+                portfolio_value=portfolio_value,
+                eth_balance=self.ethereum_interface.get_eth_balance(agent.ethereum_address),
+                token_balances=token_balances,
+                price_histories=self.price_histories.copy()
+            )
+
+            observations[agent_id] = CryptoMarketLocalObservation(
+                agent_id=agent_id,
+                observation=base_observation
+            )
+
+        return observations
+
+    def _update_price(self, trades: List[Trade]) -> None:
+        """Update prices for all tokens based on recent trades"""
+        if not trades:
+            return
+
+        # Group trades by token
+        trades_by_token = {}
+        for trade in trades:
+            if trade.coin not in trades_by_token:
+                trades_by_token[trade.coin] = []
+            trades_by_token[trade.coin].append(trade)
+
+        # Update prices for each token
+        for token, token_trades in trades_by_token.items():
+            if token not in self.current_prices:
+                self.current_prices[token] = 0.1
+                self.price_histories[token] = [0.1]
+
+            # Calculate volume-weighted average price
+            total_volume = sum(t.quantity for t in token_trades)
+            if total_volume > 0:
+                vwap = sum(t.price * t.quantity for t in token_trades) / total_volume
+                self.current_prices[token] = vwap
+                self.price_histories[token].append(vwap)
 
     def _execute_p2p_trade(self, buyer: CryptoEconomicAgent, seller: CryptoEconomicAgent, 
                           price: float, quantity: int) -> None:
@@ -412,8 +397,8 @@ class CryptoMarketMechanism(Mechanism):
         self._transfer_tokens(buyer, seller, usdc_amount, token_amount, usdc_address, token_address)
 
     def _verify_balances(self, buyer: CryptoEconomicAgent, seller: CryptoEconomicAgent,
-                        usdc_amount: int, token_amount: int,
-                        usdc_address: str, token_address: str) -> bool:
+                    usdc_amount: int, token_amount: int,
+                    usdc_address: str, token_address: str, token: str) -> bool:
         """Verify that both parties have sufficient balances for the trade."""
         try:
             # Check buyer's USDC balance
@@ -463,7 +448,7 @@ class CryptoMarketMechanism(Mechanism):
                     contract_address=token_address,
                     private_key=seller.private_key
                 )
-                logger.info(f"Seller {seller.id} approved {token_amount} {self.coin_name}. TxHash: {tx_hash}")
+                logger.info(f"Seller {seller.id} approved {token_amount} {token}. TxHash: {tx_hash}")
 
             return True
 
@@ -497,154 +482,147 @@ class CryptoMarketMechanism(Mechanism):
     def _execute_buy(self, agent: CryptoEconomicAgent, market_action: MarketAction) -> Optional[Trade]:
         """Agent buys tokens using USDC."""
         source_token_address = self.ethereum_interface.get_token_address('USDC')
-        target_token_address = self.ethereum_interface.get_token_address(self.coin_name)
-
-        # Get token decimals
-        usdc_decimals = self.ethereum_interface.get_erc20_info(source_token_address)['decimals']
-        token_decimals = self.ethereum_interface.get_erc20_info(target_token_address)['decimals']
-
-        # Convert amounts to proper decimals
-        usdc_amount = int(market_action.price * market_action.quantity * (10 ** usdc_decimals))
-        token_amount = int(market_action.quantity * (10 ** token_decimals))
-
-        # Check USDC balance (compare in same units)
-        usdc_balance = self.ethereum_interface.get_erc20_balance(
-            agent.ethereum_address,
-            source_token_address
-        )
-        if usdc_balance < usdc_amount:
-            logger.error(f"Agent {agent.id} has insufficient USDC balance. " + 
-                        f"Has: {usdc_balance / 10**usdc_decimals}, " +
-                        f"Needs: {market_action.price * market_action.quantity}")
+        target_token_address = self.ethereum_interface.get_token_address(market_action.token)
+        
+        if not target_token_address:
+            logger.error(f"Token address not found for {market_action.token}")
             return None
 
-        # Rest of the buy logic with proper decimal handling...
-        allowance = self.ethereum_interface.get_erc20_allowance(
-            owner=agent.ethereum_address,
-            spender=self.orderbook_address,
-            contract_address=source_token_address
-        )
-        
-        if allowance < usdc_amount:
-            tx_hash = self.ethereum_interface.approve_erc20(
+        try:
+            # Get token decimals
+            usdc_decimals = self.ethereum_interface.get_erc20_info(source_token_address)['decimals']
+            token_decimals = self.ethereum_interface.get_erc20_info(target_token_address)['decimals']
+
+            # Convert amounts to proper decimals
+            usdc_amount = int(market_action.price * market_action.quantity * (10 ** usdc_decimals))
+            token_amount = int(market_action.quantity * (10 ** token_decimals))
+
+            # Check USDC balance
+            usdc_balance = self.ethereum_interface.get_erc20_balance(
+                agent.ethereum_address,
+                source_token_address
+            )
+            if usdc_balance < usdc_amount:
+                logger.error(f"Agent {agent.id} has insufficient USDC balance. " + 
+                            f"Has: {usdc_balance / 10**usdc_decimals}, " +
+                            f"Needs: {market_action.price * market_action.quantity}")
+                return None
+
+            # Check and update allowance if needed
+            allowance = self.ethereum_interface.get_erc20_allowance(
+                owner=agent.ethereum_address,
                 spender=self.orderbook_address,
-                amount=usdc_amount,
-                contract_address=source_token_address,
+                contract_address=source_token_address
+            )
+            
+            if allowance < usdc_amount:
+                tx_hash = self.ethereum_interface.approve_erc20(
+                    spender=self.orderbook_address,
+                    amount=usdc_amount,
+                    contract_address=source_token_address,
+                    private_key=agent.private_key
+                )
+                logger.info(f"Agent {agent.id} approved {usdc_amount/(10**usdc_decimals)} USDC. TxHash: {tx_hash}")
+
+            # Execute the swap
+            tx_hash = self.ethereum_interface.swap(
+                source_token_address=source_token_address,
+                source_token_amount=usdc_amount,
+                target_token_address=target_token_address,
                 private_key=agent.private_key
             )
-            logger.info(f"Agent {agent.id} approved {usdc_amount/(10**usdc_decimals)} USDC. TxHash: {tx_hash}")
+            logger.info(f"Agent {agent.id} executed buy {market_action.quantity} {market_action.token} " +
+                    f"for {usdc_amount/(10**usdc_decimals)} USDC. TxHash: {tx_hash}")
 
-        tx_hash = self.ethereum_interface.swap(
-            source_token_address=source_token_address,
-            source_token_amount=usdc_amount,
-            target_token_address=target_token_address,
-            private_key=agent.private_key
-        )
-        logger.info(f"Agent {agent.id} executed buy {market_action.quantity} {self.coin_name} for {usdc_amount/(10**usdc_decimals)} USDC. TxHash: {tx_hash}")
+            return Trade(
+                trade_id=len(self.trades),
+                buyer_id=agent.id,
+                seller_id="MARKET_MAKER",
+                price=market_action.price,
+                bid_price=market_action.price,
+                ask_price=market_action.price,
+                quantity=market_action.quantity,
+                coin=market_action.token,
+                tx_hash=tx_hash,
+                timestamp=datetime.now(),
+                action_type="BUY"
+            )
 
-        return Trade(
-            trade_id=len(self.trades),
-            buyer_id=agent.id,
-            seller_id="MARKET_MAKER",
-            price=market_action.price,
-            bid_price=market_action.price,
-            ask_price=market_action.price,
-            quantity=market_action.quantity,
-            coin=self.coin_name
-        )
+        except Exception as e:
+            logger.error(f"Error executing buy for agent {agent.id}: {str(e)}")
+            return None
 
     def _execute_sell(self, agent: CryptoEconomicAgent, market_action: MarketAction) -> Optional[Trade]:
         """Agent sells tokens for USDC."""
-        source_token_address = self.ethereum_interface.get_token_address(self.coin_name)
+        source_token_address = self.ethereum_interface.get_token_address(market_action.token)
         target_token_address = self.ethereum_interface.get_token_address('USDC')
-
-        # Get token decimals
-        token_decimals = self.ethereum_interface.get_erc20_info(source_token_address)['decimals']
-        usdc_decimals = self.ethereum_interface.get_erc20_info(target_token_address)['decimals']
-
-        # Convert quantity to proper decimals
-        token_amount = int(market_action.quantity * (10 ** token_decimals))
-
-        # Check token balance
-        token_balance = self.ethereum_interface.get_erc20_balance(
-            agent.ethereum_address,
-            source_token_address
-        )
-        if token_balance < token_amount:
-            logger.error(f"Agent {agent.id} has insufficient {self.coin_name} balance. Has: {token_balance/(10**token_decimals)}, Needs: {market_action.quantity}")
+        
+        if not source_token_address:
+            logger.error(f"Token address not found for {market_action.token}")
             return None
 
-        # Rest of the sell logic with proper decimal handling...
-        allowance = self.ethereum_interface.get_erc20_allowance(
-            owner=agent.ethereum_address,
-            spender=self.orderbook_address,
-            contract_address=source_token_address
-        )
-        
-        if allowance < token_amount:
-            tx_hash = self.ethereum_interface.approve_erc20(
-                spender=self.orderbook_address,
-                amount=token_amount,
-                contract_address=source_token_address,
-                private_key=agent.private_key
-            )
-            logger.info(f"Agent {agent.id} approved {market_action.quantity} {self.coin_name}. TxHash: {tx_hash}")
+        try:
+            # Get token decimals
+            token_decimals = self.ethereum_interface.get_erc20_info(source_token_address)['decimals']
+            usdc_decimals = self.ethereum_interface.get_erc20_info(target_token_address)['decimals']
 
-        tx_hash = self.ethereum_interface.swap(
-            source_token_address=source_token_address,
-            source_token_amount=token_amount,
-            target_token_address=target_token_address,
-            private_key=agent.private_key
-        )
-        logger.info(f"Agent {agent.id} executed sell {market_action.quantity} {self.coin_name} for {market_action.price * market_action.quantity} USDC. TxHash: {tx_hash}")
+            # Convert quantity to proper decimals
+            token_amount = int(market_action.quantity * (10 ** token_decimals))
 
-        return Trade(
-            trade_id=len(self.trades),
-            buyer_id="Orderbook",
-            seller_id=agent.id,
-            price=market_action.price,
-            bid_price=market_action.price,
-            ask_price=market_action.price,
-            quantity=market_action.quantity,
-            coin=self.coin_name
-        )
-    def _update_price(self, trades: List[Trade]):
-        if trades:
-            prices = [trade.price for trade in trades]
-            self.current_price = sum(prices) / len(prices)
-        # Optionally, fetch current price from the orderbook contract
-        # self.current_price = self.ethereum_interface.get_current_price(...)
-        self.price_history.append(self.current_price)
-
-    def _create_observations(self, market_summary: MarketSummary) -> Dict[str, CryptoMarketLocalObservation]:
-        observations = {}
-        for agent_id, agent in self.agent_registry.items():
-            # Fetch agent balances
-            eth_balance = self.ethereum_interface.get_eth_balance(agent.ethereum_address)
+            # Check token balance
             token_balance = self.ethereum_interface.get_erc20_balance(
                 agent.ethereum_address,
-                self.token_addresses['USDC']
+                source_token_address
+            )
+            if token_balance < token_amount:
+                logger.error(f"Agent {agent.id} has insufficient {market_action.token} balance. " +
+                            f"Has: {token_balance/(10**token_decimals)}, " +
+                            f"Needs: {market_action.quantity}")
+                return None
+
+            # Check and update allowance if needed
+            allowance = self.ethereum_interface.get_erc20_allowance(
+                owner=agent.ethereum_address,
+                spender=self.orderbook_address,
+                contract_address=source_token_address
+            )
+            
+            if allowance < token_amount:
+                tx_hash = self.ethereum_interface.approve_erc20(
+                    spender=self.orderbook_address,
+                    amount=token_amount,
+                    contract_address=source_token_address,
+                    private_key=agent.private_key
+                )
+                logger.info(f"Agent {agent.id} approved {market_action.quantity} {market_action.token}. TxHash: {tx_hash}")
+
+            # Execute the swap
+            tx_hash = self.ethereum_interface.swap(
+                source_token_address=source_token_address,
+                source_token_amount=token_amount,
+                target_token_address=target_token_address,
+                private_key=agent.private_key
+            )
+            logger.info(f"Agent {agent.id} executed sell {market_action.quantity} {market_action.token} " +
+                    f"for {market_action.price * market_action.quantity} USDC. TxHash: {tx_hash}")
+
+            return Trade(
+                trade_id=len(self.trades),
+                buyer_id="MARKET_MAKER",
+                seller_id=agent.id,
+                price=market_action.price,
+                bid_price=market_action.price,
+                ask_price=market_action.price,
+                quantity=market_action.quantity,
+                coin=market_action.token,
+                tx_hash=tx_hash,
+                timestamp=datetime.now(),
+                action_type="SELL"
             )
 
-            # Calculate portfolio value
-            portfolio_value = eth_balance + token_balance * self.current_price  # Simplified
-
-            observation = CryptoMarketObservation(
-                trades=[],  # Trades involving the agent can be added here
-                market_summary=market_summary,
-                current_price=self.current_price,
-                portfolio_value=portfolio_value,
-                eth_balance=eth_balance,
-                token_balance=token_balance,
-                price_history=self.price_history.copy()
-            )
-
-            observations[agent_id] = CryptoMarketLocalObservation(
-                agent_id=agent_id,
-                observation=observation
-            )
-
-        return observations
+        except Exception as e:
+            logger.error(f"Error executing sell for agent {agent.id}: {str(e)}")
+            return None
     
     def _convert_to_decimal_price(self, base_unit_price: int, decimals: int = 18) -> float:
         return base_unit_price / (10 ** decimals)
@@ -652,33 +630,27 @@ class CryptoMarketMechanism(Mechanism):
     def _convert_to_base_units(self, decimal_price: float, decimals: int = 18) -> int:
         return int(decimal_price * (10 ** decimals))
 
-    def _create_market_summary(self, trades: List[Trade]) -> MarketSummary:
-        if not trades:
-            return MarketSummary(trades_count=0, average_price=self.current_price, total_volume=0, price_range=(self.current_price, self.current_price))
-
-        prices = [trade.price for trade in trades]
-        total_volume = sum(trade.quantity for trade in trades)
-        return MarketSummary(
-            trades_count=len(trades),
-            average_price=sum(prices) / len(prices),
-            total_volume=total_volume,
-            price_range=(min(prices), max(prices))
-        )
-
     def get_global_state(self) -> Dict[str, Any]:
+        """Get the current global state of the mechanism"""
         return {
+            "trades": self.trades,
+            "current_prices": self.current_prices,
+            "price_histories": self.price_histories,
             "current_round": self.current_round,
-            "current_price": self.current_price,
-            "price_history": self.price_history,
-            "trades": [trade.model_dump() for trade in self.trades],
+            "max_rounds": self.max_rounds,
+            "tokens": self.tokens,
+            "market_summary": self._create_market_summary(self.trades)
         }
 
     def reset(self) -> None:
+        """Reset the mechanism state"""
         self.current_round = 0
         self.trades = []
-        self.current_price = 0.1
-        self.price_history = [self.current_price]
-
+        
+        # Reset prices for all tokens
+        for token in self.tokens:
+            self.current_prices[token] = 0.1
+            self.price_histories[token] = [0.1]
 
 class CryptoMarket(MultiAgentEnvironment):
     name: str = Field(default="Crypto Market", description="Name of the crypto market")
