@@ -58,22 +58,19 @@ class OrderType(str, Enum):
 
 class MarketAction(BaseModel):
     order_type: OrderType = Field(default=OrderType.HOLD, description="Type of order: 'buy', 'sell', or 'hold'")
-    token: Optional[str] = Field(default=None, description="Token symbol to trade")
-    price: Optional[float] = Field(default=None, description="Price of the order (not applicable for 'hold')")
-    quantity: Optional[int] = Field(default=None, ge=0, description="Quantity of the order (not applicable for 'hold')")
+    token: str = Field(default="NONE", description="Token symbol to trade")
+    price: float = Field(default=0.0, description="Price of the order (0 for 'hold')")
+    quantity: int = Field(default=0, ge=0, description="Quantity of the order (0 for 'hold')")
 
     @model_validator(mode='after')
     def validate_order_type_and_fields(self):        
         if self.order_type == OrderType.HOLD:
-            if self.price is not None or self.quantity is not None or self.token is not None:
-                raise ValueError("Hold orders should not specify price, quantity, or token")
+            if self.price != 0.0 or self.quantity != 0 or self.token != "NONE":
+                raise ValueError("Hold orders should have price=0.0, quantity=0, and token='NONE'")
         else:
-            if None in (self.price, self.quantity, self.token):
-                raise ValueError(f"Buy and sell orders must specify price, quantity, and token. Got: price={self.price}, quantity={self.quantity}, token={self.token}")
-            if self.price <= 0 or self.quantity <= 0:
-                raise ValueError("Price and quantity must be positive for buy and sell orders")
+            if self.price <= 0 or self.quantity <= 0 or self.token == "NONE":
+                raise ValueError(f"Buy and sell orders must specify positive price, quantity, and valid token. Got: price={self.price}, quantity={self.quantity}, token={self.token}")
         return self
-
 
 class CryptoOrder(MarketAction):
     agent_id: str
@@ -96,6 +93,7 @@ class Trade(BaseModel):
     action_type: OrderType
     tx_hash: Optional[str] = Field(default=None, description="Transaction hash from the blockchain")
     timestamp: datetime = Field(default_factory=datetime.now, description="Timestamp of the trade")
+    action_type: str
 
     @model_validator(mode='after')
     def rational_trade(self):
@@ -132,8 +130,14 @@ class Portfolio(BaseModel):
     @cached_property
     def coins_dict(self) -> Dict[str, int]:
         return {coin.symbol: coin.total_quantity() for coin in self.coins}
+    
+    def get_crypto_quantity(self, symbol: str) -> int:
+        """Get quantity of a specific token"""
+        crypto = next((c for c in self.coins if c.symbol == symbol), None)
+        return crypto.total_quantity() if crypto else 0
 
     def update_crypto(self, symbol: str, quantity: int, purchase_price: Optional[float] = None):
+        """Update quantity for a specific token"""
         crypto = next((c for c in self.coins if c.symbol == symbol), None)
         if crypto is None:
             if quantity > 0:
@@ -141,13 +145,14 @@ class Portfolio(BaseModel):
                 self.coins.append(crypto)
             else:
                 return
-        if crypto is not None:
-            if purchase_price is not None and quantity > 0:
-                crypto.positions.append(Position(quantity=quantity, purchase_price=purchase_price))
-            elif quantity < 0:
-                self.sell_crypto_positions(crypto, -quantity)
-            if crypto.total_quantity() == 0:
-                self.coins.remove(crypto)
+        
+        if purchase_price is not None and quantity > 0:
+            crypto.positions.append(Position(quantity=quantity, purchase_price=purchase_price))
+        elif quantity < 0:
+            self.sell_crypto_positions(crypto, -quantity)
+            
+        if crypto.total_quantity() == 0:
+            self.coins.remove(crypto)
 
     def sell_crypto_positions(self, crypto: Crypto, quantity_to_sell: int):
         positions = crypto.positions

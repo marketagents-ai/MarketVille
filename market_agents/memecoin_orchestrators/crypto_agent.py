@@ -27,7 +27,7 @@ class CryptoEconomicAgent(BaseEconomicAgent):
     archived_endowments: List[Endowment] = Field(default_factory=list)
     risk_aversion: float = Field(default=0.5)
     expected_return: float = Field(default=0.05)
-    coin: str = Field(default="DOGE")
+    tokens: List[str] = Field(default=["DOGE"])
     ethereum_address: str = Field(default="")
     private_key: str = Field(default="")
 
