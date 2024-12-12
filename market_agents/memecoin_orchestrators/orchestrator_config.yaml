@@ -5,9 +5,9 @@ agent_config:
   initial_allocations:
     - token: "DOGE"
       quantity: 1000
-#    - token: "GOAT" 
-#      quantity: 500
-  tokens: ["DOGE"]
+    - token: "GOAT" 
+      quantity: 500
+  tokens: ["DOGE", "GOAT"]
   max_relative_spread: 0.05
   risk_aversion: 0.5
   expected_return: 0.05 
