@@ -31,6 +31,33 @@ class CryptoEconomicAgent(BaseEconomicAgent):
     ethereum_address: str = Field(default="")
     private_key: str = Field(default="")
 
+    @property
+    def coin(self) -> str:
+        """Backwards compatibility for single token references"""
+        return self.tokens[0] if self.tokens else "DOGE"
+
+    def get_token_balance(self, token: str) -> int:
+        """Get current balance for specific token from endowment"""
+        return self.endowment.current_portfolio.get_crypto_quantity(token)
+
+    def get_initial_token_balance(self, token: str) -> int:
+        """Get initial balance for specific token from endowment"""
+        return self.endowment.initial_portfolio.get_crypto_quantity(token)
+
+    def update_token_balance(self, symbol: str, balance: int):
+        """Update the token balance in the agent's portfolio"""
+        crypto = next((c for c in self.current_portfolio.coins if c.symbol == symbol), None)
+        if not crypto:
+            crypto = Crypto(symbol=symbol, positions=[])
+            self.current_portfolio.coins.append(crypto)
+        
+        if crypto.positions:
+            crypto.positions[0].quantity = balance
+        else:
+            crypto.positions.append(Position(quantity=balance, purchase_price=0))
+        
+        logger.info(f"Updated {symbol} balance to {balance} for agent {self.id}")
+
     def archive_endowment(self, new_portfolio: Optional[Portfolio] = None):
         self.archived_endowments.append(self.endowment.model_copy(deep=True))
         if new_portfolio is None:
@@ -207,26 +234,6 @@ class CryptoEconomicAgent(BaseEconomicAgent):
         else:
             logger.warning(f"Trade processed but matching order not found for agent {self.id}")
         self.endowment.add_trade(trade)
-
-    def update_token_balance(self, symbol: str, balance: int):
-        """Update the token balance in the agent's portfolio"""
-        if symbol == self.coin:
-            # Find or create the crypto in the portfolio
-            crypto = next((c for c in self.current_portfolio.coins if c.symbol == symbol), None)
-            if not crypto:
-                crypto = Crypto(symbol=symbol, positions=[])
-                self.current_portfolio.coins.append(crypto)
-            
-            # Update or create a single position with the new balance
-            if crypto.positions:
-                crypto.positions[0].quantity = balance
-            else:
-                # If no positions exist, create one with the current market price (or 0 if unknown)
-                crypto.positions.append(Position(quantity=balance, purchase_price=0))
-            
-            logger.info(f"Updated {symbol} balance to {balance} for agent {self.id}")
-        else:
-            logger.warning(f"Attempted to update balance for unknown token {symbol} for agent {self.id}")
 
     def update_cash_balance(self, balance: float):
         """Update the cash (ETH) balance in the agent's portfolio"""
