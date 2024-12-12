@@ -235,31 +235,41 @@ class SimulationDataInserter:
 
     def insert_trades(self, trades_data: List[Dict[str, Any]], agent_id_map: Dict[str, uuid.UUID]):
         query = """
-        INSERT INTO trades (buyer_id, seller_id, quantity, price, round)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO trades (buyer_id, seller_id, quantity, price, buyer_surplus, seller_surplus, total_surplus, round)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
         """
         try:
             with self.conn.cursor() as cur:
                 for trade in trades_data:
-                    buyer_id = agent_id_map.get(str(trade['buyer_id']))
-                    seller_id = agent_id_map.get(str(trade['seller_id']))
-
-                    if buyer_id is None or seller_id is None:
-                        logging.error(f"No matching UUID found for buyer_id: {trade['buyer_id']} or seller_id: {trade['seller_id']}")
-                        continue
-
-                    cur.execute(query, (
+                    # Handle market maker trades by using a special UUID for market maker
+                    buyer_id = (agent_id_map.get(str(trade['buyer_id'])) if trade['buyer_id'] != 'MARKET_MAKER' 
+                            else uuid.uuid5(uuid.NAMESPACE_DNS, 'MARKET_MAKER'))
+                    seller_id = (agent_id_map.get(str(trade['seller_id'])) if trade['seller_id'] != 'MARKET_MAKER'
+                            else uuid.uuid5(uuid.NAMESPACE_DNS, 'MARKET_MAKER'))
+                    
+                    values = (
                         buyer_id,
                         seller_id,
                         trade['quantity'],
                         trade['price'],
+                        trade['buyer_surplus'],
+                        trade['seller_surplus'],
+                        trade['total_surplus'],
                         trade['round']
-                    ))
+                    )
+                    logging.info(f"Inserting trade with values: {values}")
+                    
+                    cur.execute(query, values)
+                    trade_id = cur.fetchone()[0]
+                    logging.info(f"Successfully inserted trade with ID: {trade_id}")
+                    
             self.conn.commit()
-            logging.info(f"Inserted {len(trades_data)} trades into the database")
+            logging.info(f"Successfully committed {len(trades_data)} trades to database")
         except Exception as e:
             self.conn.rollback()
             logging.error(f"Error inserting trades: {str(e)}")
+            logging.exception("Full exception details:")
             raise
 
     def insert_interactions(self, interactions: List[Dict[str, Any]], agent_id_map: Dict[str, uuid.UUID]):

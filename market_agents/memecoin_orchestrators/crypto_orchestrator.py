@@ -40,12 +40,12 @@ from agent_evm_interface.agent_evm_interface import EthereumInterface
 # Define CryptoTracker for tracking crypto market-specific data
 class CryptoTracker:
     def __init__(self):
-        self.trades: List[Trade] = []  # Add this
+        self.trades: List[Trade] = []
         self.agent_portfolios: Dict[str, float] = {}
         self.price_history: Dict[str, List[float]] = {}
         self.volume_history: Dict[str, List[float]] = {}
         
-    def add_trade(self, trade: Trade):
+    def add_trade(self, trade: Trade, round_num: int):
         """Add a trade to the tracker"""
         self.trades.append(trade)
         
@@ -73,6 +73,29 @@ class CryptoTracker:
         }
         return summary
 
+    def get_trades_data(self) -> List[Dict]:
+        """Get trades data in format suitable for database insertion"""
+        return [
+            {
+                'buyer_id': str(trade.buyer_id),
+                'seller_id': str(trade.seller_id),
+                'quantity': float(trade.quantity),
+                'price': float(trade.price),
+                'coin': trade.coin,
+                'round': getattr(trade, 'round', 0),  # Default to 0 if round not set
+                'timestamp': getattr(trade, 'timestamp', datetime.now()),
+                'tx_hash': getattr(trade, 'tx_hash', None)
+            }
+            for trade in self.trades
+        ]
+
+    def add_round_data(self, volume: float, prices: Dict[str, float]):
+        """Add data for a single round"""
+        for token, price in prices.items():
+            self.update_price_history(price, token)
+            if token not in self.volume_history:
+                self.volume_history[token] = []
+            self.volume_history[token].append(volume)
 # Implement the CryptoOrchestrator class
 class CryptoOrchestrator(BaseEnvironmentOrchestrator):
     def __init__(
@@ -105,12 +128,18 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
         self.minter_private_key = self.minter_account['private_key']
         self.token_addresses = self.ethereum_interface.testnet_data['token_addresses']
         try:
+            # Get quote token (USDC) address
             self.quote_token_address = self.ethereum_interface.get_token_address('USDC')
-            self.doge_token_address = self.ethereum_interface.get_token_address('DOGE')
-            self.orderbook_address = self.ethereum_interface.testnet_data['orderbook_address']
-            
             self.logger.info(f"USDC address: {self.quote_token_address}")
-            self.logger.info(f"DOGE address: {self.doge_token_address}")
+            
+            # Get addresses for all configured trading tokens
+            self.trading_token_addresses = {}
+            for token in self.orchestrator_config.agent_config.tokens:
+                token_address = self.ethereum_interface.get_token_address(token)
+                self.trading_token_addresses[token] = token_address
+                self.logger.info(f"{token} address: {token_address}")
+            
+            self.orderbook_address = self.ethereum_interface.testnet_data['orderbook_address']
         except (ValueError, KeyError) as e:
             self.logger.error(f"Error getting token addresses: {str(e)}")
             raise
@@ -130,7 +159,7 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
         token_decimals['USDC'] = usdc_info['decimals']
         token_addresses['USDC'] = self.quote_token_address
 
-        # Get info for all trading tokens
+        # Get info for all trading tokens from config
         supported_tokens = self.orchestrator_config.agent_config.tokens
         for token in supported_tokens:
             token_address = self.ethereum_interface.get_token_address(token)
@@ -140,9 +169,10 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
 
         # Define readable amounts for all tokens
         READABLE_AMOUNTS = {
-            'USDC': 10_000,
-            'ETH': 0.1,
+            'USDC': 10_000,  # Initial USDC allocation
+            'ETH': 0.1,      # Initial ETH for gas
         }
+
         # Add initial amounts for trading tokens from config
         for allocation in self.orchestrator_config.agent_config.initial_allocations:
             READABLE_AMOUNTS[allocation['token']] = allocation['quantity']
@@ -152,9 +182,11 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
             'USDC': int(READABLE_AMOUNTS['USDC'] * (10 ** token_decimals['USDC'])),
             'ETH': int(READABLE_AMOUNTS['ETH'] * (10 ** 18))
         }
+        
         # Add raw amounts for trading tokens
         for token in supported_tokens:
-            INITIAL_AMOUNTS[token] = int(READABLE_AMOUNTS[token] * (10 ** token_decimals[token]))
+            if token in READABLE_AMOUNTS:
+                INITIAL_AMOUNTS[token] = int(READABLE_AMOUNTS[token] * (10 ** token_decimals[token]))
 
         for agent in self.agents:
             # Mint USDC (quote token)
@@ -186,6 +218,7 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
 
             # Log initial balances
             balance_info = []
+            
             # USDC balance
             usdc_balance = self.ethereum_interface.get_erc20_balance(
                 agent.economic_agent.ethereum_address,
@@ -213,7 +246,7 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
                 {chr(10).join(balance_info)}
             """)
 
-            # Initialize portfolio positions
+            # Initialize portfolio positions for all tokens
             for token in supported_tokens:
                 agent.economic_agent.endowment.initial_portfolio.update_crypto(
                     symbol=token,
@@ -224,7 +257,7 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
         # Create the crypto market mechanism with multiple tokens
         crypto_mechanism = CryptoMarketMechanism(
             max_rounds=self.config.max_rounds,
-            tokens=supported_tokens,
+            tokens=supported_tokens,  # Pass all supported tokens from config
             ethereum_interface=self.ethereum_interface
         )
         crypto_mechanism.setup()
@@ -325,16 +358,18 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
         global_action = GlobalCryptoMarketAction(actions=agent_actions)
         try:
             env_state = env.step(global_action)
+            
+            if isinstance(env_state.global_observation, CryptoMarketGlobalObservation):
+                self.process_environment_state(env_state)
+                self.last_env_state = env_state
+            else:
+                self.logger.error(f"Unexpected global observation type: {type(env_state.global_observation)}")
+
         except Exception as e:
             self.logger.error(f"Error in environment {self.environment_name}: {str(e)}")
             raise e
 
         self.logger.info(f"Completed {self.environment_name} step")
-
-        if isinstance(env_state.global_observation, CryptoMarketGlobalObservation):
-            self.process_environment_state(env_state)
-
-        self.last_env_state = env_state
 
         log_section(self.logger, "AGENT REFLECTIONS")
         await self.cognitive_processor.run_parallel_reflect(
@@ -414,95 +449,72 @@ class CryptoOrchestrator(BaseEnvironmentOrchestrator):
             self.logger.error(f"Unexpected global observation type: {type(global_observation)}")
             return
 
-        # Get current prices for all tokens in the system
-        token_prices = {}
-        for token_symbol, token_address in self.token_addresses.items():
+        # Update agent states with their observations
+        for agent_id, agent_observation in global_observation.observations.items():
             try:
-                # Skip if token is the quote token (USDC)
-                if token_address == self.quote_token_address:
-                    continue
-
-                pair_info = self.ethereum_interface.get_pair_info(
-                    token_address,
-                    self.quote_token_address
-                )
-                token_prices[token_symbol] = pair_info['token0_price_in_token1'] / 1e18
-                self.logger.debug(f"Current price for {token_symbol}: {token_prices[token_symbol]}")
+                agent = next((agent for agent in self.agents if agent.id == agent_id), None)
+                if agent:
+                    agent.last_observation = agent_observation
+                    agent.last_step = env_state
             except Exception as e:
-                self.logger.warning(f"Could not get pair info for {token_symbol}-USDC: {e}")
-                token_prices[token_symbol] = 0
+                self.logger.error(f"Error updating agent {agent_id} state: {str(e)}")
 
-        # Track trades and calculate rewards
-        agent_rewards = {}
-        all_trades = global_observation.all_trades
-        self.logger.info(f"Processing {len(all_trades)} trades")
+        # Initialize tracker if not exists
+        if not hasattr(self, 'tracker'):
+            self.tracker = CryptoTracker()
 
-        for trade in all_trades:
+        # Process trades from global observation
+        self.logger.info(f"Processing {len(global_observation.all_trades)} trades")
+        log_section(self.logger, "TRADES")
+
+        for trade in global_observation.all_trades:
             try:
                 # Skip processing if it's a HOLD action
                 if trade.action_type == OrderType.HOLD:
                     self.logger.info(f"Agent {trade.buyer_id} holds {trade.coin}")
                     continue
 
-                # Get current price for the traded token
-                current_price = token_prices.get(trade.coin, 0)
-                if current_price == 0:
-                    self.logger.warning(f"No price available for {trade.coin}, using fallback")
-                    current_price = 1e18  # fallback price
-
-                # Handle special cases for buyer
-                buyer = None
+                # Process buyer side
                 if trade.buyer_id != "MARKET":
                     try:
                         buyer = next(agent for agent in self.agents if agent.id == trade.buyer_id)
+                        buyer.economic_agent.process_trade(trade)
+                        self.update_agent_balances(buyer.economic_agent)
                     except StopIteration:
                         self.logger.warning(f"Buyer {trade.buyer_id} not found in agents")
-                        continue
 
-                # Handle special cases for seller
-                seller = None
+                # Process seller side
                 if trade.seller_id not in ["MARKET", "Orderbook"]:
                     try:
                         seller = next(agent for agent in self.agents if agent.id == trade.seller_id)
+                        seller.economic_agent.process_trade(trade)
+                        self.update_agent_balances(seller.economic_agent)
                     except StopIteration:
                         self.logger.warning(f"Seller {trade.seller_id} not found in agents")
-                        continue
 
-                # Process buyer side if exists
-                if buyer:
-                    buyer.economic_agent.process_trade(trade)
-                    buyer_reward = buyer.economic_agent.calculate_trade_reward(trade, current_price)
-                    agent_rewards[buyer.id] = agent_rewards.get(buyer.id, 0) + buyer_reward
-                    self.update_agent_balances(buyer.economic_agent)
-
-                # Process seller side if exists
-                if seller:
-                    seller.economic_agent.process_trade(trade)
-                    seller_reward = seller.economic_agent.calculate_trade_reward(trade, current_price)
-                    agent_rewards[seller.id] = agent_rewards.get(seller.id, 0) + seller_reward
-                    self.update_agent_balances(seller.economic_agent)
-
-                # Add trade to tracker
-                self.tracker.add_trade(trade)
+                # Add trade to tracker with current round
+                self.tracker.add_trade(trade, env_state.current_round)
                 
-                # Update price history for the specific token
-                self.tracker.update_price_history(current_price, trade.coin)
+                # Update price history
+                self.tracker.update_price_history(trade.price, trade.coin)
                 
                 # Log trade details
-                trade_msg = (f"Processed trade: {trade.buyer_id or 'MARKET'} "
-                            f"bought {trade.quantity} {trade.coin} from "
-                            f"{trade.seller_id or 'MARKET'} at {trade.price} USDC")
-                self.logger.info(trade_msg)
+                self.logger.info(
+                    f"Trade executed - {trade.coin}: "
+                    f"Price: {trade.price:.6f} USDC, "
+                    f"Quantity: {trade.quantity:.6f}, "
+                    f"Buyer: {trade.buyer_id}, "
+                    f"Seller: {trade.seller_id}"
+                )
 
             except Exception as ex:
                 self.logger.error(f"Error processing trade {trade}: {str(ex)}")
                 self.logger.exception("Exception details:")
-                continue
 
-        # Log summary of token prices
+        # Log current prices from global observation
         self.logger.info("Current market prices:")
-        for token, price in token_prices.items():
-            self.logger.info(f"{token}: {price} USDC")
+        for token, price in global_observation.current_prices.items():
+            self.logger.info(f"{token}: {price:.6f} USDC")
 
 
     def update_agent_balances(self, agent: CryptoEconomicAgent):
