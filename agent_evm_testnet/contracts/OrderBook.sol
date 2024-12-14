@@ -66,14 +66,15 @@ contract OrderBook is Ownable {
         require(current_price <= limit_price, "Current price exceeds limit price");
 
         uint256 total_price = amount * current_price;
-        uint256 fee_amount = total_price * fee / 1000;
+        // TODO : fee calculation
+        uint256 fee_amount = 1;
         uint256 final_price = total_price + fee_amount;
 
         require(price_token_instance.transferFrom(msg.sender, address(this), final_price), "Transfer failed, check balance and allowance");
         require(token.transfer(msg.sender, amount), "Transfer failed, check contract balance");
 
         // TODO: update price properly
-        uint256 new_price = (current_price * 1000 + limit_price) / 1001;
+        uint256 new_price = current_price;
         prices[token_address] = new_price;
 
         emit BuyOrder(msg.sender, token_address, amount, current_price, new_price);
@@ -96,13 +97,14 @@ contract OrderBook is Ownable {
         require(current_price >= limit_price, "Current price is less than limit price");
 
         uint256 total_price = amount * current_price;
-        uint256 fee_amount = total_price * fee / 1000;
+        // TODO : fee calculation
+        uint256 fee_amount = 1;
         uint256 final_price = total_price - fee_amount;
 
         require(token.transferFrom(msg.sender, address(this), amount), "Transfer failed, check balance and allowance");
         require(price_token_instance.transfer(msg.sender, final_price), "Transfer failed, check contract balance");
         // TODO: update price properly
-        uint256 new_price = (current_price * 1000 + limit_price) / 1001;
+        uint256 new_price = current_price;
         prices[token_address] = new_price;
         emit SellOrder(msg.sender, token_address, amount, current_price, new_price);
     }

@@ -247,33 +247,59 @@ def test_limit_orders(erc20_deployer, orderbook_deployer, orderbook_address, tok
     orderbook = orderbook_deployer.get_contract(orderbook_address, orderbook_deployer.compile_contract("contracts/OrderBook.sol"))
     
     print(f"orderbook address: {orderbook_address}")
+    
+    # Get price token (token[0])
+    price_token = tokens[0]
+    
+    # get current price of each token
+    token_prices = []
+    print("\nCurrent prices:")
+    for i, address in enumerate(token_addresses):
+        price = orderbook_deployer.get_price(orderbook, address)
+        token_prices.append(price)
+        print(f"{token_symbols[i]}: {price} {token_symbols[0]} per token")
 
-    # set allowance for all tokens
-    for token in tokens:
-        # print token address
-        print(f"\nToken address: {token.address}")
-
-        # approve OrderBook to spend tokens
-        tx = orderbook_deployer.approve_token(token, orderbook_address, 10**18)
-        
-        # print the allowance
-        print(f"Allowance for {token.address}: {token.functions.allowance(erc20_deployer.account_address, orderbook_address).call()}")
+    # For buy orders: Approve price token with enough allowance
+    # Calculate needed allowance: amount * price * (1 + fee)
+    buy_amount = 10  # 10 tokens
+    buy_price = token_prices[1]  # price of BETA token
+    sell_price = token_prices[2]  # price of GAMMA token
+    fee = orderbook_deployer.get_current_fee(orderbook)  # fee in thousandths (e.g., 1 = 0.1%)
+    buy_allowance_needed = (buy_amount * buy_price) + 1
+    
+    print("\nApproving price token for buy orders...")
+    tx = orderbook_deployer.approve_token(
+        price_token, 
+        orderbook_address, 
+        buy_allowance_needed
+    )
+    print(f"Approved {buy_allowance_needed // 10**18} {token_symbols[0]} for OrderBook")
+    
+    # For sell orders: Approve source token
+    sell_amount = 1  # 1 token
+    print("\nApproving source token for sell orders...")
+    tx = orderbook_deployer.approve_token(
+        tokens[2],  # GAMMA token for sell order
+        orderbook_address, 
+        sell_amount
+    )
+    print(f"Approved {sell_amount // 10**18} {token_symbols[2]} for OrderBook")
 
     # Place limit buy order
     print("\nPlacing limit buy order...")
-    source_token = token_addresses[1]
-    source_amount = 1000 * 10**18  # 1000 tokens
-    limit_price = 1000 * 10**18  # 1000 wei per token
-    orderbook_deployer.place_limit_buy_order(orderbook, source_token, source_amount, limit_price)
-    print(f"Placed limit buy order for {source_amount // 10**18} {token_symbols[1]} at {limit_price / 10**18} wei per token")
+    print(f"order book price token balance: {erc20_deployer.get_balance(price_token, orderbook_address) // 10**18}")
+    print(f"order book source token balance: {erc20_deployer.get_balance(tokens[1], orderbook_address) // 10**18}")
+    print(f"deployer source token balance: {erc20_deployer.get_balance(tokens[1], erc20_deployer.account_address) // 10**18}")
+    print(f"deployer price token balance: {erc20_deployer.get_balance(price_token, erc20_deployer.account_address) // 10**18}")
+    source_token = token_addresses[1]  # BETA token
+    orderbook_deployer.place_limit_buy_order(orderbook, source_token, buy_amount, buy_price)
+    print(f"Placed limit buy order for {buy_amount // 10**18} {token_symbols[1]} at {buy_price / 10**18} wei per token")
     
     # Place limit sell order
     print("\nPlacing limit sell order...")
-    source_token = token_addresses[2]
-    source_amount = 500 * 10**18  # 500 tokens
-    limit_price = 500 * 10**18  # 500 wei per token
-    orderbook_deployer.place_limit_sell_order(orderbook, source_token, source_amount, limit_price)
-    print(f"Placed limit sell order for {source_amount // 10**18} {token_symbols[2]} at {limit_price / 10**18} wei per token")
+    source_token = token_addresses[2]  # GAMMA token
+    orderbook_deployer.place_limit_sell_order(orderbook, source_token, sell_amount, sell_price)
+    print(f"Placed limit sell order for {sell_amount // 10**18} {token_symbols[2]} at {500} wei per token")
 
 def main():
     # Initialize deployers
@@ -308,10 +334,19 @@ def main():
             token_addresses.append(address)
             print(f"Deployed {symbol} at: {address}")
             
-            # Mint initial supply (1M tokens) to account[0]
-            initial_supply = 1_000_000_000 * 10**18  # 1M tokens with 18 decimals
-            erc20_deployer.mint_tokens(contract, erc20_deployer.account_address, initial_supply)
-            print(f"Minted {initial_supply // 10**18} {symbol} to {erc20_deployer.account_address}")
+            # Mint initial supply (1M tokens) to orderbook_address
+            initial_supply = 1_000_000_000_000 * 10**18  # 1M tokens with 18 decimals
+            erc20_deployer.mint_tokens(contract, orderbook_address, initial_supply)
+
+            # mint 10k tokens to erc20_deployer.account_address
+            erc20_deployer.mint_tokens(contract, erc20_deployer.account_address, 10_000 * 10**18) 
+
+            print(f"Minted {initial_supply // 10**18} {symbol} to OrderBook")
+            print(f"Minted 10k {symbol} to deployer account")
+
+            #print balances
+            print(f"OrderBook {symbol} balance: {erc20_deployer.get_balance(contract, orderbook_address) // 10**18}")
+            print(f"Deployer {symbol} balance: {erc20_deployer.get_balance(contract, erc20_deployer.account_address) // 10**18}")
 
         # set price_token to initial token
         orderbook_deployer.set_price_token(orderbook, token_addresses[0])
@@ -329,6 +364,8 @@ def main():
         print("\nDeployed tokens:")
         for i, address in enumerate(token_addresses):
             print(f"{token_symbols[i]}: {address}")
+            print(f"Balance: {erc20_deployer.get_balance(tokens[i], orderbook_address) // 10**18} {token_symbols[i]}")
+            print(f"account {erc20_deployer.account_address} balance: {erc20_deployer.get_balance(tokens[i], erc20_deployer.account_address) // 10**18} {token_symbols[i]}")
 
         # Test placing limit orders
         test_limit_orders(erc20_deployer, orderbook_deployer, orderbook_address, tokens, token_addresses, token_symbols)
