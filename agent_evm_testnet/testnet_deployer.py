@@ -145,6 +145,18 @@ class OrderBookTestDeployer:
         tx_hash = self.w3.eth.send_transaction(tx)
         return self.w3.eth.wait_for_transaction_receipt(tx_hash)
     
+    def set_price_token(self, contract, token_address):
+        """Set the price token for the OrderBook"""
+        tx = contract.functions.set_price_token(token_address).build_transaction({
+            'from': self.account_address,
+            'nonce': self.w3.eth.get_transaction_count(self.account_address),
+            'gas': 200000,
+            'gasPrice': self.w3.eth.gas_price
+        })
+        
+        tx_hash = self.w3.eth.send_transaction(tx)
+        return self.w3.eth.wait_for_transaction_receipt(tx_hash)
+
     def approve_token(self, token_contract, spender, amount, from_address=None):
         """Approve tokens for spending"""
         if from_address is None:
@@ -160,48 +172,12 @@ class OrderBookTestDeployer:
         tx_hash = self.w3.eth.send_transaction(tx)
         return self.w3.eth.wait_for_transaction_receipt(tx_hash)
     
-    def deposit(self, contract, token_address, amount, from_address=None):
-        """Deposit tokens into the OrderBook"""
+    def place_limit_buy_order(self, contract, source_token, source_amount, limit_price, from_address=None):
+        """Place a limit buy order on the OrderBook"""
         if from_address is None:
             from_address = self.account_address
             
-        # Remove the withdrawal check and just deposit
-        tx = contract.functions.deposit(token_address, amount).build_transaction({
-            'from': from_address,
-            'nonce': self.w3.eth.get_transaction_count(from_address),
-            'gas': 200000,
-            'gasPrice': self.w3.eth.gas_price
-        })
-        
-        tx_hash = self.w3.eth.send_transaction(tx)
-        return self.w3.eth.wait_for_transaction_receipt(tx_hash)
-
-    def withdraw(self, contract, token_address, from_address=None):
-        """Withdraw tokens from the OrderBook"""
-        if from_address is None:
-            from_address = self.account_address
-            
-        # Check if there's any liquidity to withdraw
-        existing_liquidity = contract.functions.individual_liquidity(from_address, token_address).call()
-        if existing_liquidity == 0:
-            return None
-            
-        tx = contract.functions.withdraw(token_address).build_transaction({
-            'from': from_address,
-            'nonce': self.w3.eth.get_transaction_count(from_address),
-            'gas': 200000,
-            'gasPrice': self.w3.eth.gas_price
-        })
-        
-        tx_hash = self.w3.eth.send_transaction(tx)
-        return self.w3.eth.wait_for_transaction_receipt(tx_hash)
-    
-    def swap(self, contract, source_token, source_amount, target_token, from_address=None):
-        """Execute a token swap"""
-        if from_address is None:
-            from_address = self.account_address
-            
-        tx = contract.functions.swap(source_token, source_amount, target_token).build_transaction({
+        tx = contract.functions.place_limit_buy_order(source_token, source_amount, limit_price).build_transaction({
             'from': from_address,
             'nonce': self.w3.eth.get_transaction_count(from_address),
             'gas': 300000,
@@ -211,139 +187,93 @@ class OrderBookTestDeployer:
         tx_hash = self.w3.eth.send_transaction(tx)
         return self.w3.eth.wait_for_transaction_receipt(tx_hash)
     
-    def get_price(self, contract, sell_token_address, buy_token_address):
+    def place_limit_sell_order(self, contract, source_token, source_amount, limit_price, from_address=None):
+        """Place a limit sell order on the OrderBook"""
+        if from_address is None:
+            from_address = self.account_address
+            
+        tx = contract.functions.place_limit_sell_order(source_token, source_amount, limit_price).build_transaction({
+            'from': from_address,
+            'nonce': self.w3.eth.get_transaction_count(from_address),
+            'gas': 300000,
+            'gasPrice': self.w3.eth.gas_price
+        })
+        
+        tx_hash = self.w3.eth.send_transaction(tx)
+        return self.w3.eth.wait_for_transaction_receipt(tx_hash)
+    
+    def get_price(self, contract, token_address):
         """Get the current price between two tokens"""
-        return contract.functions.get_price(sell_token_address, buy_token_address).call()
-    
-    def get_individual_liquidity(self, contract, user_address, token_address):
-        """Get individual liquidity for a user and token"""
-        return contract.functions.individual_liquidity(user_address, token_address).call()
-    
-    def get_total_pool_balance(self, contract, token_address):
-        """Get total pool balance for a token"""
-        return contract.functions.total_pool_balance(token_address).call()
+        return contract.functions.get_price(token_address).call()
     
     def get_current_fee(self, contract):
         """Get current fee setting"""
         return contract.functions.fee().call()
     
-def test_swaps_and_price_changes(erc20_deployer, orderbook_deployer, orderbook_address, tokens, token_addresses, token_symbols):
-    """
-    Test token swaps and verify price changes in the OrderBook
+    def get_price_token_address(self, contract):
+        """Get the token address of the price token"""
+        return contract.functions.price_token().call()
     
-    Args:
-        erc20_deployer: ERC20TestDeployer instance
-        orderbook_deployer: OrderBookTestDeployer instance
-        orderbook_address: Address of the deployed OrderBook contract
-        tokens: List of token contract instances
-        token_addresses: List of token contract addresses
-        token_symbols: List of token symbols
-    """
-    
-    # Get OrderBook contract
-    orderbook_details = orderbook_deployer.compile_contract("OrderBook.sol")
-    orderbook = orderbook_deployer.get_contract(orderbook_address, orderbook_details)
-    
-    # Test account (using accounts[1] to simulate different user)
-    test_account = erc20_deployer.w3.eth.accounts[1]
-    
-    # Amount to swap (100 tokens)
-    swap_amount = 100 * 10**18
-    
-    print("\nTesting swaps and price changes...")
-    
-    # Test swaps between first three tokens (ALPHA, BETA, GAMMA)
-    for i in range(3):
-        for j in range(i + 1, 3):
-            token1, token2 = tokens[i], tokens[j]
-            addr1, addr2 = token_addresses[i], token_addresses[j]
-            sym1, sym2 = token_symbols[i], token_symbols[j]
-            
-            print(f"\nTesting {sym1}-{sym2} swap pair:")
-            
-            try:
-                # Get initial balances and price
-                initial_price = orderbook_deployer.get_price(orderbook, addr1, addr2)
-                initial_balance1 = token1.functions.balanceOf(test_account).call()
-                initial_balance2 = token2.functions.balanceOf(test_account).call()
-                initial_pool1 = orderbook_deployer.get_total_pool_balance(orderbook, addr1)
-                initial_pool2 = orderbook_deployer.get_total_pool_balance(orderbook, addr2)
-                
-                print(f"Initial pool balances: {initial_pool1 / 10**18} {sym1}, {initial_pool2 / 10**18} {sym2}")
-                
-                # Store the pre-mint balance to calculate actual change
-                pre_mint_balance1 = token1.functions.balanceOf(test_account).call()
-                
-                # Mint some tokens to test account
-                erc20_deployer.mint_tokens(token1, test_account, swap_amount * 2)
-                print(f"Minted {swap_amount / 10**18} {sym1} to test account")
-                
-                # Important fix: Approve tokens for OrderBook contract address
-                tx = token1.functions.approve(
-                    orderbook_address,
-                    swap_amount * 2
-                ).build_transaction({
-                    'from': test_account,
-                    'nonce': erc20_deployer.w3.eth.get_transaction_count(test_account),
-                    'gas': 100000,
-                    'gasPrice': erc20_deployer.w3.eth.gas_price
-                })
-                
-                tx_hash = erc20_deployer.w3.eth.send_transaction(tx)
-                erc20_deployer.w3.eth.wait_for_transaction_receipt(tx_hash)
-                print(f"Approved {sym1} for OrderBook")
-                
-                # Verify allowance
-                allowance = token1.functions.allowance(test_account, orderbook_address).call()
-                print(f"Current allowance: {allowance / 10**18} {sym1}")
-                
-                # Get balance right before swap
-                balance_before_swap1 = token1.functions.balanceOf(test_account).call()
-                balance_before_swap2 = token2.functions.balanceOf(test_account).call()
-                
-                # Execute swap
-                print(f"Swapping {swap_amount / 10**18} {sym1} for {sym2}...")
-                orderbook_deployer.swap(
-                    orderbook,
-                    addr1,
-                    swap_amount,
-                    addr2,
-                    test_account
-                )
-                
-                # Get post-swap values
-                new_price = orderbook_deployer.get_price(orderbook, addr1, addr2)
-                new_balance1 = token1.functions.balanceOf(test_account).call()
-                new_balance2 = token2.functions.balanceOf(test_account).call()
-                new_pool1 = orderbook_deployer.get_total_pool_balance(orderbook, addr1)
-                new_pool2 = orderbook_deployer.get_total_pool_balance(orderbook, addr2)
-                
-                # Calculate actual balance changes from the swap (excluding minting)
-                balance_change1 = new_balance1 - balance_before_swap1
-                balance_change2 = new_balance2 - balance_before_swap2
-                
-                # Print results
-                print(f"\nSwap completed!")
-                print(f"New price {sym1}/{sym2}: {new_price / 10**18}")
-                print(f"Price change: {((new_price - initial_price) / initial_price) * 100:.2f}%")
-                print(f"New pool balances: {new_pool1 / 10**18} {sym1}, {new_pool2 / 10**18} {sym2}")
-                print(f"Token balance changes from swap:")
-                print(f"{sym1}: {balance_change1 / 10**18}")
-                print(f"{sym2}: {balance_change2 / 10**18}")
-                
-                # Verify expected behaviors
-                assert new_price != initial_price, "Price should change after swap"
-                assert new_pool1 > initial_pool1, f"Pool {sym1} balance should increase"
-                assert new_pool2 < initial_pool2, f"Pool {sym2} balance should decrease"
-                assert balance_change1 == -swap_amount, f"User {sym1} balance should decrease by swap amount"
-                assert balance_change2 > 0, f"User {sym2} balance should increase"
-                
-            except Exception as e:
-                print(f"Error testing {sym1}-{sym2} swap: {str(e)}")
-                continue
-    
-    print("\nSwap tests completed!")
+    def get_token_balance(self, contract, token_address):
+        """Get the total balance of a token in the OrderBook"""
+        return contract.functions.get_token_balance(token_address).call()
 
+    def set_price(self, contract, token_address, new_price):
+        """Set a new price for a token"""
+        tx = contract.functions.set_price(token_address, new_price).build_transaction({
+            'from': self.account_address,
+            'nonce': self.w3.eth.get_transaction_count(self.account_address),
+            'gas': 200000,
+            'gasPrice': self.w3.eth.gas_price
+        })
+        
+        tx_hash = self.w3.eth.send_transaction(tx)
+        return self.w3.eth.wait_for_transaction_receipt(tx_hash)
+    
+    def set_price_batch(self, contract, token_addresses, new_prices):
+        """Set new prices for multiple tokens"""
+        tx = contract.functions.set_price_batch(token_addresses, new_prices).build_transaction({
+            'from': self.account_address,
+            'nonce': self.w3.eth.get_transaction_count(self.account_address),
+            'gas': 300000,
+            'gasPrice': self.w3.eth.gas_price
+        })
+        
+        tx_hash = self.w3.eth.send_transaction(tx)
+        return self.w3.eth.wait_for_transaction_receipt(tx_hash)
+
+def test_limit_orders(erc20_deployer, orderbook_deployer, orderbook_address, tokens, token_addresses, token_symbols):
+    """Test placing limit orders on the OrderBook"""
+    orderbook = orderbook_deployer.get_contract(orderbook_address, orderbook_deployer.compile_contract("contracts/OrderBook.sol"))
+    
+    print(f"orderbook address: {orderbook_address}")
+
+    # set allowance for all tokens
+    for token in tokens:
+        # print token address
+        print(f"\nToken address: {token.address}")
+
+        # approve OrderBook to spend tokens
+        tx = orderbook_deployer.approve_token(token, orderbook_address, 10**18)
+        
+        # print the allowance
+        print(f"Allowance for {token.address}: {token.functions.allowance(erc20_deployer.account_address, orderbook_address).call()}")
+
+    # Place limit buy order
+    print("\nPlacing limit buy order...")
+    source_token = token_addresses[1]
+    source_amount = 1000 * 10**18  # 1000 tokens
+    limit_price = 1000 * 10**18  # 1000 wei per token
+    orderbook_deployer.place_limit_buy_order(orderbook, source_token, source_amount, limit_price)
+    print(f"Placed limit buy order for {source_amount // 10**18} {token_symbols[1]} at {limit_price / 10**18} wei per token")
+    
+    # Place limit sell order
+    print("\nPlacing limit sell order...")
+    source_token = token_addresses[2]
+    source_amount = 500 * 10**18  # 500 tokens
+    limit_price = 500 * 10**18  # 500 wei per token
+    orderbook_deployer.place_limit_sell_order(orderbook, source_token, source_amount, limit_price)
+    print(f"Placed limit sell order for {source_amount // 10**18} {token_symbols[2]} at {limit_price / 10**18} wei per token")
 
 def main():
     # Initialize deployers
@@ -383,54 +313,16 @@ def main():
             erc20_deployer.mint_tokens(contract, erc20_deployer.account_address, initial_supply)
             print(f"Minted {initial_supply // 10**18} {symbol} to {erc20_deployer.account_address}")
 
-        # Create pools for all possible pairs
-        print("\nCreating liquidity pools...")
-        pool_amount = 10_000_000 * 10**18  # 10k tokens per pool
-        
-        for i, token1 in enumerate(tokens):
-            for j, token2 in enumerate(tokens):
-                if i < j:  # Avoid duplicate pairs and same token pairs
-                    print(f"\nCreating pool for {token_symbols[i]}-{token_symbols[j]}")
-                    
-                    # First approve both tokens if needed
-                    allowance1 = token1.functions.allowance(
-                        erc20_deployer.account_address, 
-                        orderbook_address
-                    ).call()
-                    
-                    allowance2 = token2.functions.allowance(
-                        erc20_deployer.account_address, 
-                        orderbook_address
-                    ).call()
-                    
-                    if allowance1 < pool_amount:
-                        print(f"Approving {token_symbols[i]}...")
-                        orderbook_deployer.approve_token(token1, orderbook_address, pool_amount)
-                    
-                    if allowance2 < pool_amount:
-                        print(f"Approving {token_symbols[j]}...")
-                        orderbook_deployer.approve_token(token2, orderbook_address, pool_amount)
-                    
-                    try:
-                        # Deposit first token
-                        print(f"Depositing {token_symbols[i]}...")
-                        orderbook_deployer.deposit(orderbook, token_addresses[i], pool_amount)
-                        
-                        # Deposit second token
-                        print(f"Depositing {token_symbols[j]}...")
-                        orderbook_deployer.deposit(orderbook, token_addresses[j], pool_amount)
-                        
-                        # Verify pool creation
-                        price = orderbook_deployer.get_price(orderbook, token_addresses[i], token_addresses[j])
-                        print(f"Pool created! Current price {token_symbols[i]}/{token_symbols[j]}: {price / 10**18}")
-                        
-                        balance1 = orderbook_deployer.get_total_pool_balance(orderbook, token_addresses[i])
-                        balance2 = orderbook_deployer.get_total_pool_balance(orderbook, token_addresses[j])
-                        print(f"Pool balances: {balance1 / 10**18} {token_symbols[i]}, {balance2 / 10**18} {token_symbols[j]}")
-                        
-                    except Exception as e:
-                        print(f"Error creating pool {token_symbols[i]}-{token_symbols[j]}: {str(e)}")
-                        continue
+        # set price_token to initial token
+        orderbook_deployer.set_price_token(orderbook, token_addresses[0])
+
+        # set batch price to be random from 1 to 10 price_token per token
+        prices = [i * 10**18 for i in range(1, 11)]
+        orderbook_deployer.set_price_batch(orderbook, token_addresses[1:], prices[1:])
+       
+        print("\nOrderbook prices:")
+        for i, address in enumerate(token_addresses):
+            print(f"{token_symbols[i]}: {orderbook_deployer.get_price(orderbook, address)} {token_symbols[0]} per token")
 
         print("\nSetup complete! OrderBook is ready for testing.")
         print(f"OrderBook contract address: {orderbook_address}")
@@ -438,14 +330,8 @@ def main():
         for i, address in enumerate(token_addresses):
             print(f"{token_symbols[i]}: {address}")
 
-        test_swaps_and_price_changes(
-            erc20_deployer, 
-            orderbook_deployer, 
-            orderbook_address, 
-            tokens, 
-            token_addresses, 
-            token_symbols
-        )
+        # Test placing limit orders
+        test_limit_orders(erc20_deployer, orderbook_deployer, orderbook_address, tokens, token_addresses, token_symbols)
 
         # save all addresses and ABIs to a json file
         data = {
@@ -456,8 +342,6 @@ def main():
             "token_abi": erc20_interface['abi']
         }
         
-
-
         with open('../testnet_data.json', 'w') as file:
             json.dump(data, file)
 
