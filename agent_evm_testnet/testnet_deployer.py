@@ -293,13 +293,25 @@ def test_limit_orders(erc20_deployer, orderbook_deployer, orderbook_address, tok
     print(f"deployer price token balance: {erc20_deployer.get_balance(price_token, erc20_deployer.account_address) // 10**18}")
     source_token = token_addresses[1]  # BETA token
     orderbook_deployer.place_limit_buy_order(orderbook, source_token, buy_amount, buy_price)
-    print(f"Placed limit buy order for {buy_amount // 10**18} {token_symbols[1]} at {buy_price / 10**18} wei per token")
-    
+    print(f"Placed limit buy order for {buy_amount} {token_symbols[1]} at {buy_price / 10**18} {token_symbols[0]} per token")
+    print(f"order book price token balance: {erc20_deployer.get_balance(price_token, orderbook_address) // 10**18}")
+    print(f"order book source token balance: {erc20_deployer.get_balance(tokens[1], orderbook_address) // 10**18}")
+    print(f"deployer source token balance: {erc20_deployer.get_balance(tokens[1], erc20_deployer.account_address) // 10**18}")
+    print(f"deployer price token balance: {erc20_deployer.get_balance(price_token, erc20_deployer.account_address) // 10**18}")
+
     # Place limit sell order
     print("\nPlacing limit sell order...")
+    print(f"order book price token balance: {erc20_deployer.get_balance(price_token, orderbook_address) // 10**18}")
+    print(f"order book source token balance: {erc20_deployer.get_balance(tokens[2], orderbook_address) // 10**18}")
+    print(f"deployer source token balance: {erc20_deployer.get_balance(tokens[2], erc20_deployer.account_address) // 10**18}")
+    print(f"deployer price token balance: {erc20_deployer.get_balance(price_token, erc20_deployer.account_address) // 10**18}")
     source_token = token_addresses[2]  # GAMMA token
     orderbook_deployer.place_limit_sell_order(orderbook, source_token, sell_amount, sell_price)
-    print(f"Placed limit sell order for {sell_amount // 10**18} {token_symbols[2]} at {500} wei per token")
+    print(f"Placed limit sell order for {sell_amount} {token_symbols[2]} at {sell_price / 10**18} {token_symbols[0]} per token")
+    print(f"order book price token balance: {erc20_deployer.get_balance(price_token, orderbook_address) // 10**18}")
+    print(f"order book source token balance: {erc20_deployer.get_balance(tokens[2], orderbook_address) // 10**18}")
+    print(f"deployer source token balance: {erc20_deployer.get_balance(tokens[2], erc20_deployer.account_address) // 10**18}")
+    print(f"deployer price token balance: {erc20_deployer.get_balance(price_token, erc20_deployer.account_address) // 10**18}")
 
 def main():
     # Initialize deployers
