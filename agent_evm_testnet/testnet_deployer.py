@@ -333,6 +333,10 @@ def main():
                         "ZETA", "ETA", "THETA", "IOTA", "KAPPA"]
         tokens = []
         token_addresses = []
+
+        # get hardhat accounts
+        accounts = erc20_deployer.w3.eth.accounts
+
         
         # Compile ERC20 contract once
         erc20_interface = erc20_deployer.compile_contract("contracts/MinimalERC20.sol")
@@ -350,11 +354,12 @@ def main():
             initial_supply = 1_000_000_000_000 * 10**18  # 1M tokens with 18 decimals
             erc20_deployer.mint_tokens(contract, orderbook_address, initial_supply)
 
-            # mint 10k tokens to erc20_deployer.account_address
-            erc20_deployer.mint_tokens(contract, erc20_deployer.account_address, 10_000 * 10**18) 
-
             print(f"Minted {initial_supply // 10**18} {symbol} to OrderBook")
-            print(f"Minted 10k {symbol} to deployer account")
+
+            # mint 10k tokens to every account
+            for account in accounts:
+                erc20_deployer.mint_tokens(contract, account, 10_000 * 10**18)
+                print(f"Minted 10k {symbol} to {account}")            
 
             #print balances
             print(f"OrderBook {symbol} balance: {erc20_deployer.get_balance(contract, orderbook_address) // 10**18}")

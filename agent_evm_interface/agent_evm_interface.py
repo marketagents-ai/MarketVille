@@ -81,38 +81,36 @@ class EthereumInterface:
         return transfer_events
 
     @external
-    def get_swap_history(self, sourceToken: str, targetToken: str) -> list:
+    def get_limit_order_history(self, token: str) -> list:
         
+        # on the orderbook:
+        # event BuyOrder(address indexed user, address indexed token, uint256 amount, uint256 price, uint256 new_price);
+        # event SellOrder(address indexed user, address indexed token, uint256 amount, uint256 price, uint256 new_price);
+    
         orderbook_address = self.testnet_data['orderbook_address']
         orderbook_abi = self.testnet_data['orderbook_abi']
         w3 = Web3(Web3.HTTPProvider(self.rpc_url))
         contract = w3.eth.contract(address=orderbook_address, abi=orderbook_abi)
-        # on the orderbook: event Swap(address indexed user, address indexed sourceToken, address indexed targetToken, uint256 sourceAmount, uint256 targetAmount);
-        # find events with targetToken = address_1 or address_2 and sourceToken is the other
-        swap_events = contract.events.Swap().get_logs(from_block=0, to_block='latest', argument_filters={'sourceToken': sourceToken, 'targetToken': targetToken})
         
-        return swap_events
+        # find events with the token address
+        buy_events = contract.events.BuyOrder().get_logs(from_block=0, to_block='latest', argument_filters={'token': token})
+        sell_events = contract.events.SellOrder().get_logs(from_block=0, to_block='latest', argument_filters={'token': token})
 
+        # zip the events together
+        events = sorted(buy_events + sell_events, key=lambda x: x['blockNumber'])
+        return events
+        
     @external
-    def get_pair_info(self, token0: str, token1: str) -> dict:
+    def get_price(self, token: str) -> int:
+        # get the latest price of the token in ETH
         orderbook_address = self.testnet_data['orderbook_address']
         orderbook_abi = self.testnet_data['orderbook_abi']
         w3 = Web3(Web3.HTTPProvider(self.rpc_url))
-        orderbook_contract = w3.eth.contract(address=orderbook_address, abi=orderbook_abi)
-        token0_contract = w3.eth.contract(address=token0, abi=self.testnet_data['token_abi'])
-        token1_contract = w3.eth.contract(address=token1, abi=self.testnet_data['token_abi'])
+        contract = w3.eth.contract(address=orderbook_address, abi=orderbook_abi)
 
-        token0_balance = token0_contract.functions.balanceOf(orderbook_address).call()
-        token1_balance = token1_contract.functions.balanceOf(orderbook_address).call()
-        token0_price_in_token1 = orderbook_contract.functions.get_price(token0, token1).call()
-        token1_price_in_token0 = orderbook_contract.functions.get_price(token1, token0).call()
-
-        return {
-            'token0_balance': token0_balance,
-            'token1_balance': token1_balance,
-            'token0_price_in_token1': token0_price_in_token1,
-            'token1_price_in_token0': token1_price_in_token0
-        }
+        # get the latest price
+        price = contract.functions.get_price(token).call()
+        return price
 
     @external
     def send_eth(self, to: str, amount: int, private_key: str) -> str:
@@ -252,13 +250,14 @@ class EthereumInterface:
         
         return tx_hash.hex()
 
+    # on the contract: function place_limit_buy_order(address token_address, uint256 amount, uint256 limit_price) public {
     @external
-    def swap(self, source_token_address: str, source_token_amount: int, target_token_address: str, private_key: str) -> str:
+    def place_limit_buy_order(self, token_address: str, amount: int, limit_price: int, private_key: str) -> str:
         orderbook_address = self.testnet_data['orderbook_address']
         orderbook_abi = self.testnet_data['orderbook_abi']
         w3 = Web3(Web3.HTTPProvider(self.rpc_url))
         account = Account.from_key(private_key)
-        orderbook_contract = w3.eth.contract(address=orderbook_address, abi=orderbook_abi)
+        contract = w3.eth.contract(address=orderbook_address, abi=orderbook_abi)
         
         # Get the nonce
         nonce = w3.eth.get_transaction_count(account.address)
@@ -274,14 +273,52 @@ class EthereumInterface:
         }
         
         # Estimate gas for this specific transaction
-        gas_estimate = orderbook_contract.functions.swap(source_token_address, source_token_amount, target_token_address).estimate_gas(tx_params)
+        gas_estimate = contract.functions.place_limit_buy_order(token_address, amount, limit_price).estimate_gas(tx_params)
         
         # Add 10% buffer to gas estimate
         gas_limit = int(gas_estimate * 1.1)
         
         # Build final transaction with gas parameters
         tx_params['gas'] = gas_limit
-        data = orderbook_contract.functions.swap(source_token_address, source_token_amount, target_token_address).build_transaction(tx_params)
+        data = contract.functions.place_limit_buy_order(token_address, amount, limit_price).build_transaction(tx_params)
+        
+        # Sign and send transaction
+        signed_txn = account.sign_transaction(data)
+        tx_hash = w3.eth.send_raw_transaction(signed_txn.raw_transaction)
+        
+        return tx_hash.hex()
+    
+    # on the contract: function place_limit_sell_order(address token_address, uint256 amount, uint256 limit_price) public {
+    @external
+    def place_limit_sell_order(self, token_address: str, amount: int, limit_price: int, private_key: str) -> str:
+        orderbook_address = self.testnet_data['orderbook_address']
+        orderbook_abi = self.testnet_data['orderbook_abi']
+        w3 = Web3(Web3.HTTPProvider(self.rpc_url))
+        account = Account.from_key(private_key)
+        contract = w3.eth.contract(address=orderbook_address, abi=orderbook_abi)
+        
+        # Get the nonce
+        nonce = w3.eth.get_transaction_count(account.address)
+        
+        # Get current gas price with a small buffer (1.1x)
+        gas_price = int(w3.eth.gas_price * 1.1)
+        
+        # Build transaction with empty gas estimate
+        tx_params = {
+            'nonce': nonce,
+            'gasPrice': gas_price,
+            'from': account.address
+        }
+        
+        # Estimate gas for this specific transaction
+        gas_estimate = contract.functions.place_limit_sell_order(token_address, amount, limit_price).estimate_gas(tx_params)
+        
+        # Add 10% buffer to gas estimate
+        gas_limit = int(gas_estimate * 1.1)
+        
+        # Build final transaction with gas parameters
+        tx_params['gas'] = gas_limit
+        data = contract.functions.place_limit_sell_order(token_address, amount, limit_price).build_transaction(tx_params)
         
         # Sign and send transaction
         signed_txn = account.sign_transaction(data)
@@ -341,37 +378,6 @@ if __name__ == '__main__':
         print('Calling get_erc20_transfer_events...')
         transfer_events = ei.get_erc20_transfer_events(erc20_address, 0, 'latest')
         print(f'  -Transfer Events: {len(transfer_events)}')
-
-    # get swap history for every token pair
-    print('Calling get_swap_history...')
-    for i, sourceToken in enumerate(erc20_addresses):
-        for j, targetToken in enumerate(erc20_addresses):
-            if i == j:
-                continue
-            swap_history = ei.get_swap_history(sourceToken, targetToken)
-            if len(swap_history) > 0:
-                print("~"*50)
-                print(f'Source Token: {erc20_token_symbols[i]}')
-                print(f'Target Token: {erc20_token_symbols[j]}')
-                print(f'  -Swap History: {len(swap_history)}')
-                print()
-
-    # get pair info for every token pair
-    print('Calling get_pair_info...')
-    for i, token0 in enumerate(erc20_addresses):
-        for j, token1 in enumerate(erc20_addresses):
-            if i == j:
-                continue
-            pair_info = ei.get_pair_info(token0, token1)
-            print("~"*50)
-            print(f'Token0: {erc20_token_symbols[i]}')
-            print(f'Token1: {erc20_token_symbols[j]}')
-            print(f'  -Token0 Balance: {pair_info["token0_balance"]}')
-            print(f'  -Token1 Balance: {pair_info["token1_balance"]}')
-            print(f'  -Token0 Price in Token1: {pair_info["token0_price_in_token1"]}')
-            print(f'  -Token1 Price in Token0: {pair_info["token1_price_in_token0"]}')
-            print()
-
 
     print('Calling send_eth...')
     # send 0.00001 from each account to the next account, round robin
@@ -454,32 +460,81 @@ if __name__ == '__main__':
         print(f'  -After Allowance (Receiver): {after_allowance_receiver}')
         print()
 
-    print('Calling swap...')
+    print('Testing limit orders...')
+    # Place buy and sell orders for the first token
+    test_token = erc20_addresses[1]
+    price_token = erc20_addresses[0]
 
-    print("performing 100 random small swaps")
-    for i in range(100):
-        source_token_address = random.choice(erc20_addresses)
-        target_token_address = random.choice(erc20_addresses)
-        while source_token_address == target_token_address:
-            target_token_address = random.choice(erc20_addresses)
-        source_token_amount = random.randint(1, 100)
+    # Get current price
+    current_price = ei.get_price(test_token)
+    print(f'Current price for {erc20_token_symbols[1]}: {current_price}')
+    
+    # Place some test orders using the first few accounts
+    test_accounts = ei.accounts[:3]
+    
+    
+    # set allowance for the orderbook for each token
+    for account in test_accounts:
+        ei.approve_erc20(orderbook_address, 10000000000000000000000000000000000000, test_token, account['private_key'])
+        ei.approve_erc20(orderbook_address, 10000000000000000000000000000000000000, price_token, account['private_key'])
+        print(f'Allowances set for {account["address"]}')
 
-        account = random.choice(ei.accounts)
-
-        # set allowance for the source token to the orderbook
-        tx_hash = ei.approve_erc20(orderbook_address, source_token_amount, source_token_address, account['private_key'])
-        print(f"approve {source_token_amount} from {account['address']} to orderbook tx_hash: {tx_hash}")
-
-        # print pair info
-        pair_info = ei.get_pair_info(source_token_address, target_token_address)
-        print(f"pair info for {source_token_address} and {target_token_address}")
+    # Test buy orders
+    print('\nPlacing buy orders...')
+    for i, account in enumerate(test_accounts):
+        
+        buy_price = int(current_price)  
+        amount = 1  # Amount to buy
+        
+        print(f'\nAccount {i} placing buy order:')
+        print(f'  Address: {account["address"]}')
+        print(f'  Amount: {amount}')
+        print(f'  Price: {buy_price}')
+        
+        try:
+            tx_hash = ei.place_limit_buy_order(
+                test_token,
+                amount,
+                buy_price,
+                account['private_key']
+            )
+            print(f'  Buy order placed. TX Hash: {tx_hash}')
+        except Exception as e:
+            print(f'  Error placing buy order: {str(e)}')
+    
+    # Test sell orders
+    print('\nPlacing sell orders...')
+    for i, account in enumerate(test_accounts):
+        
+        sell_price = int(current_price)  
+        amount = 1  # Amount to sell
+        
+        print(f'\nAccount {i} placing sell order:')
+        print(f'  Address: {account["address"]}')
+        print(f'  Amount: {amount}')
+        print(f'  Price: {sell_price}')
+        
+        try:
+            tx_hash = ei.place_limit_sell_order(
+                test_token,
+                amount,
+                sell_price,
+                account['private_key']
+            )
+            print(f'  Sell order placed. TX Hash: {tx_hash}')
+        except Exception as e:
+            print(f'  Error placing sell order: {str(e)}')
+    
+    # Get order history
+    print('\nGetting order history...')
+    order_history = ei.get_limit_order_history(test_token)
+    print(f'Total orders found: {len(order_history)}')
+    for event in order_history[-5:]:  # Show last 5 orders
+        print(f'Order event:')
+        print(f'  Block: {event["blockNumber"]}')
+        print(f'  Transaction: {event["transactionHash"].hex()}')
+        print(f'  Event type: {event["event"]}')
+        print(f'  User: {event["args"]["user"]}')
+        print(f'  Amount: {event["args"]["amount"]}')
+        print(f'  Price: {event["args"]["price"]}')
         print()
-        print(pair_info)
-        print()
-
-        # mint tokens to the user
-        ei.mint_erc20(account['address'], source_token_amount, source_token_address, ei.accounts[0]['private_key'])
-
-        print(f"attempting swap from {source_token_address} to {target_token_address} with amount {source_token_amount}")
-        tx_hash = ei.swap(source_token_address, source_token_amount, target_token_address, account['private_key'])
-        print(f"swap from {source_token_address} to {target_token_address} with amount {source_token_amount} tx_hash: {tx_hash}")

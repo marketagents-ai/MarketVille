@@ -27,8 +27,8 @@ contract OrderBook is Ownable {
     }
 
 
-    function get_token_balance(address token) public view returns (uint256) {
-        IERC20 token = IERC20(token);
+    function get_token_balance(address _token) public view returns (uint256) {
+        IERC20 token = IERC20(_token);
         return token.balanceOf(address(this));
     }
 
