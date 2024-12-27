@@ -10,8 +10,8 @@ from typing import List, Dict, Union
 import warnings
 
 import yaml
-from auction_orchestrator import AuctionOrchestrator
-from groupchat_orchestrator import GroupChatOrchestrator
+from market_agents.orchestrators.auction_orchestrator import AuctionOrchestrator
+from market_agents.orchestrators.groupchat_orchestrator import GroupChatOrchestrator
 from market_agents.agents.market_agent import MarketAgent
 from market_agents.agents.personas.persona import Persona, generate_persona, save_persona_to_file
 from market_agents.agents.protocols.acl_message import ACLMessage
